@@ -101,6 +101,14 @@ function love_load()
 
     -- Ignite the Permanent Quad-Core Engine!
     VibeMath.vmath_init_thread_pool()
+    -- Bind the raw FFI pointers to the C-Backend for the Zipping loop
+    Engine.bindGeometry(
+        tonumber(ffi.cast("uintptr_t", Memory.Arrays.Vert_LX)),
+        tonumber(ffi.cast("uintptr_t", Memory.Arrays.Vert_LY)),
+        tonumber(ffi.cast("uintptr_t", Memory.Arrays.Vert_LZ))
+    )
+
+    print("[INIT] Bound SoA Geometry to Vulkan Backend.")
 end
 
 function love_update(dt)

@@ -83,7 +83,13 @@ static int l_setCameraMatrix(lua_State* L) {
     }
     return 0;
 }
-
+static int l_bindGeometry(lua_State* L) {
+    // We pass the pointers as raw numbers from Lua to bypass any FFI strictness
+    g_ptrX = (float*)(uintptr_t)lua_tonumber(L, 1);
+    g_ptrY = (float*)(uintptr_t)lua_tonumber(L, 2);
+    g_ptrZ = (float*)(uintptr_t)lua_tonumber(L, 3);
+    return 0;
+}
 static int l_isKeyDown(lua_State* L) { int key = luaL_checkinteger(L, 1); lua_pushboolean(L, glfwGetKey(g_window, key) == GLFW_PRESS); return 1; }
 static int l_setRelativeMode(lua_State* L) { glfwSetInputMode(g_window, GLFW_CURSOR, lua_toboolean(L, 1) ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL); return 0; }
 // Mimics love.mouse.isDown(button)
@@ -151,6 +157,7 @@ int main() {
     lua_pushcfunction(L, l_getVRAM_Z); lua_setfield(L, -2, "getVRAM_Z");
     lua_pushcfunction(L, l_isMouseDown); lua_setfield(L, -2, "isMouseDown");
     lua_pushcfunction(L, l_setCameraMatrix); lua_setfield(L, -2, "setCameraMatrix");
+    lua_pushcfunction(L, l_bindGeometry); lua_setfield(L, -2, "bindGeometry");
     lua_setglobal(L, "Engine");
 
     if (luaL_dofile(L, "main.lua") != LUA_OK) { printf("FATAL: %s\n", lua_tostring(L, -1)); return -1; }

@@ -121,7 +121,7 @@ function love_update(dt)
     -- Bypassing physics, forcing the VRAM to become a 3D Donut
     -- 15.0 is the Major Radius (size of the ring)
     -- 5.0 is the Minor Radius (thickness of the tube)
-    vmath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, time, 15.0, 5.0)
+    VibeMath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, time, 15.0, 5.0)
 end
 function OLD_love_update(dt)
     dt = math.min(dt, 0.033)

@@ -12,7 +12,7 @@ Config = {
 local VibeMath = ffi.load(jit.os == "Windows" and "vibemath" or "./libvibemath.so")
 local Memory = require("memory")
 local Sequence = require("sequence")
-
+local Auditor = require("memory_audit")
 local SwarmModule
 local CameraModule
 local global_time = 0
@@ -149,7 +149,7 @@ function love_update(dt)
 
     -- 3. Execute AVX2 Physics
     VibeMath.vmath_execute_queue(q_len, global_time, dt, read_buffer, write_buffer)
-
+    Auditor.RunPreflight(Memory,DrawCount)
     DrawCount = mem.Obj_VertCount[0]
 end
 function love_mousemoved(x, y, dx, dy)

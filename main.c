@@ -72,7 +72,13 @@ char* readShaderFile(const char* filename, size_t* outSize) {
     return buffer;
 }
 
-typedef struct { float w; float h; } ScreenPushConstants;
+// ========================================================
+// SHADER PUSH CONSTANTS
+// ========================================================
+// This must perfectly match the layout(push_constant) in render.vert
+typedef struct {
+    float viewProj[16]; // 64 bytes (A standard 4x4 Matrix)
+} CameraPushConstants;
 
 int main() {
     lua_State* L = luaL_newstate(); g_L = L; luaL_openlibs(L);
@@ -448,12 +454,35 @@ int main() {
         // ========================================================
         // Push the 64-byte Camera Matrix to the Vertex Shader
         // (Assuming you filled 'cam_pc' from Lua/C math right before this)
+        // vkCmdPushConstants(
+            // commandBuffer,
+            // graphicsPipelineLayout,
+            // VK_SHADER_STAGE_VERTEX_BIT,
+            // 0,
+            // sizeof(CameraPushConstants),
+            // &cam_pc
+        // );
+        // ========================================================
+        // 5. PUSH CONSTANTS & THE INSTANCED DRAW CALL
+        // ========================================================
+        
+        // Instantiate the struct
+        CameraPushConstants cam_pc = {0};
+        
+        // Temporary Identity Matrix (Scale 1, No Rotation, No Translation)
+        // You will eventually overwrite this with the matrix from your AVX2/Lua camera!
+        cam_pc.viewProj[0]  = 1.0f;
+        cam_pc.viewProj[5]  = 1.0f;
+        cam_pc.viewProj[10] = 1.0f;
+        cam_pc.viewProj[15] = 1.0f;
+
+        // Push the 64-byte Camera Matrix to the Vertex Shader
         vkCmdPushConstants(
-            commandBuffer,
-            graphicsPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            sizeof(CameraPushConstants),
+            commandBuffer, 
+            graphicsPipelineLayout, 
+            VK_SHADER_STAGE_VERTEX_BIT, 
+            0, 
+            sizeof(CameraPushConstants), 
             &cam_pc
         );
 

@@ -79,6 +79,35 @@ function love_load()
     print("[LUA] Running love_load...")
     Engine.setRelativeMode(true)
 
+    -- Restore the FOV
+    MainCamera.fov = (CANVAS_W / 800) * 600
+
+    print("[LUA] Hijacking CPU RAM with RTX 3050 Pointers...")
+    Memory.Arrays.Vert_PX = ffi.cast("float*", Engine.getVRAM_X())
+    Memory.Arrays.Vert_PY = ffi.cast("float*", Engine.getVRAM_Y())
+    Memory.Arrays.Vert_PZ = ffi.cast("float*", Engine.getVRAM_Z())
+
+    Memory.RenderStruct.Vert_PX = Memory.Arrays.Vert_PX
+    Memory.RenderStruct.Vert_PY = Memory.Arrays.Vert_PY
+    Memory.RenderStruct.Vert_PZ = Memory.Arrays.Vert_PZ
+
+    -- ONLY LOAD THE CAMERA
+    Sequence.LoadModule("camera", MainCamera)
+    CameraModule = Sequence.Loaded["camera"]
+    Sequence.RunPhase("Init")
+
+    -- ====================================================
+    -- THE CULLING OF THE GHOSTS
+    -- ====================================================
+    -- Do NOT bind the engine.
+    -- Do NOT load the swarm module.
+    -- Do NOT ignite the thread pool.
+    -- Let the void be silent so the Donut may spin.
+end
+function OLD_DEPRECATED_love_load()
+    print("[LUA] Running love_load...")
+    Engine.setRelativeMode(true)
+
     -- [THE FIX] Restore the FOV so the CPU stops dividing by zero!
     MainCamera.fov = (CANVAS_W / 800) * 600
     -- ========================================================

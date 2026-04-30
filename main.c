@@ -8,6 +8,16 @@
 #include <luajit-2.1/lualib.h>
 #include <luajit-2.1/lauxlib.h>
 #include <math.h>
+// ========================================================
+// SHADER PUSH CONSTANTS
+// ========================================================
+// This must perfectly match the layout(push_constant) in render.vert
+typedef struct {
+    float viewProj[16]; // 64 bytes (A standard 4x4 Matrix)
+} CameraPushConstants;
+
+// Global instance to hold the data coming from Lua
+CameraPushConstants g_cam_pc = {0};
 
 // ========================================================
 // CAMERA MATH HELPER
@@ -121,17 +131,6 @@ char* readShaderFile(const char* filename, size_t* outSize) {
     char* buffer = malloc(*outSize); fread(buffer, 1, *outSize, file); fclose(file);
     return buffer;
 }
-
-// ========================================================
-// SHADER PUSH CONSTANTS
-// ========================================================
-// This must perfectly match the layout(push_constant) in render.vert
-typedef struct {
-    float viewProj[16]; // 64 bytes (A standard 4x4 Matrix)
-} CameraPushConstants;
-
-// Global instance to hold the data coming from Lua
-CameraPushConstants g_cam_pc = {0};
 
 int main() {
     lua_State* L = luaL_newstate(); g_L = L; luaL_openlibs(L);
@@ -614,15 +613,6 @@ int main() {
         // ========================================================
         // 5. PUSH CONSTANTS & THE INSTANCED DRAW CALL
         // ========================================================
-        CameraPushConstants cam_pc = {0};
-        
-        // Build a camera matrix looking at the swarm from 150.0 units away
-        build_camera_matrix(
-            (float)swapchainExtent.width, 
-            (float)swapchainExtent.height, 
-            150.0f, // <--- Adjust this to zoom in/out!
-            g_cam_pc.viewProj
-        );
 
         // Push the 64-byte Camera Matrix to the Vertex Shader
         vkCmdPushConstants(

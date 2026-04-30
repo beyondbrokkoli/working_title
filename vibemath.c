@@ -899,7 +899,6 @@ EXPORT void vmath_execute_queue(int command_count, float time, float dt, int rea
             int vStart = g_mem->Obj_VertStart[id], vCount = g_mem->Obj_VertCount[id];
 
             // REMOVED OLD CALLS
-            );
         }
     }
 

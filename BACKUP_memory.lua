@@ -190,11 +190,7 @@ ffi.cdef[[
         float time, float dt,
         int read_idx, int write_idx
     );
-    void vmath_generate_torus(
-        int count,
-        float* lx, float* ly, float* lz,
-        float time, float major_R, float minor_r
-    );
+
     void vmath_init_thread_pool();
     void vmath_shutdown_thread_pool();
 ]]

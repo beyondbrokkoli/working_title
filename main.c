@@ -7,7 +7,46 @@
 #include <luajit-2.1/lua.h>
 #include <luajit-2.1/lualib.h>
 #include <luajit-2.1/lauxlib.h>
+#include <math.h>
 
+// ========================================================
+// CAMERA MATH HELPER
+// ========================================================
+void build_camera_matrix(float width, float height, float cam_z, float* out_matrix) {
+    float fov = 1.0472f; // 60 degrees in radians
+    float aspect = width / height;
+    float zNear = 0.1f;
+    float zFar = 1000.0f;
+
+    // 1. Perspective Matrix (Vulkan Y-down format)
+    float f = 1.0f / tanf(fov * 0.5f);
+    float proj[16] = {0};
+    proj[0]  = f / aspect;
+    proj[5]  = -f;
+    proj[10] = zFar / (zNear - zFar);
+    proj[11] = -1.0f;
+    proj[14] = -(zFar * zNear) / (zFar - zNear);
+
+    // 2. View Matrix (Translating the world away from the camera)
+    float view[16] = {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, -cam_z, 1
+    };
+
+    // 3. Matrix Multiplication: out_matrix = proj * view
+    for (int i = 0; i < 16; i++) out_matrix[i] = 0.0f;
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            out_matrix[c * 4 + r] = 
+                proj[0 * 4 + r] * view[c * 4 + 0] +
+                proj[1 * 4 + r] * view[c * 4 + 1] +
+                proj[2 * 4 + r] * view[c * 4 + 2] +
+                proj[3 * 4 + r] * view[c * 4 + 3];
+        }
+    }
+}
 // THE 3 SOA VRAM POINTERS
 void *g_ptrX = NULL, *g_ptrY = NULL, *g_ptrZ = NULL;
 GLFWwindow* g_window = NULL;
@@ -226,7 +265,7 @@ int main() {
     VkShaderModuleCreateInfo fragInfo = {0}; fragInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO; fragInfo.codeSize = fragSize; fragInfo.pCode = (uint32_t*)fragCode;
     VkShaderModule vertModule, fragModule; vkCreateShaderModule(device, &vertInfo, NULL, &vertModule); vkCreateShaderModule(device, &fragInfo, NULL, &fragModule); free(vertCode); free(fragCode);
 
-// ========================================================
+    // ========================================================
     // 1. SHADER STAGES
     // ========================================================
     VkPipelineShaderStageCreateInfo shaderStages[2] = {{0}};
@@ -560,29 +599,15 @@ int main() {
         // ========================================================
         // 5. PUSH CONSTANTS & THE INSTANCED DRAW CALL
         // ========================================================
-        // Push the 64-byte Camera Matrix to the Vertex Shader
-        // (Assuming you filled 'cam_pc' from Lua/C math right before this)
-        // vkCmdPushConstants(
-            // commandBuffer,
-            // graphicsPipelineLayout,
-            // VK_SHADER_STAGE_VERTEX_BIT,
-            // 0,
-            // sizeof(CameraPushConstants),
-            // &cam_pc
-        // );
-        // ========================================================
-        // 5. PUSH CONSTANTS & THE INSTANCED DRAW CALL
-        // ========================================================
-        
-        // Instantiate the struct
         CameraPushConstants cam_pc = {0};
         
-        // Temporary Identity Matrix (Scale 1, No Rotation, No Translation)
-        // You will eventually overwrite this with the matrix from your AVX2/Lua camera!
-        cam_pc.viewProj[0]  = 1.0f;
-        cam_pc.viewProj[5]  = 1.0f;
-        cam_pc.viewProj[10] = 1.0f;
-        cam_pc.viewProj[15] = 1.0f;
+        // Build a camera matrix looking at the swarm from 150.0 units away
+        build_camera_matrix(
+            (float)swapchainExtent.width, 
+            (float)swapchainExtent.height, 
+            150.0f, // <--- Adjust this to zoom in/out!
+            cam_pc.viewProj
+        );
 
         // Push the 64-byte Camera Matrix to the Vertex Shader
         vkCmdPushConstants(

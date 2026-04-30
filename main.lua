@@ -19,6 +19,9 @@ local global_time = 0
 local read_buffer = 0
 local write_buffer = 1
 
+local time = 0
+DrawCount = 1000000 -- Make sure your global draw count is set for Vulkan!
+
 local CMD = {
     CLEAR = 1,
     SWARM_APPLY_BASE_PHYSICS = 2,
@@ -108,6 +111,19 @@ function love_load()
     VibeMath.vmath_init_thread_pool()
 end
 function love_update(dt)
+    time = time + dt
+    
+    local ptrX = Engine.getVRAM_X()
+    local ptrY = Engine.getVRAM_Y()
+    local ptrZ = Engine.getVRAM_Z()
+
+    -- THE ELECTRICAL SHORTCUT
+    -- Bypassing physics, forcing the VRAM to become a 3D Donut
+    -- 15.0 is the Major Radius (size of the ring)
+    -- 5.0 is the Minor Radius (thickness of the tube)
+    vmath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, time, 15.0, 5.0)
+end
+function OLD_love_update(dt)
     dt = math.min(dt, 0.033)
     global_time = global_time + dt
 

@@ -57,8 +57,16 @@ void build_camera_matrix(float width, float height, float cam_z, float* out_matr
         }
     }
 }
-// THE 3 SOA VRAM POINTERS
-void *g_ptrX = NULL, *g_ptrY = NULL, *g_ptrZ = NULL;
+// The AoS structure Vulkan will consume
+typedef struct {
+    float x, y, z;
+} VertexAoS;
+
+// The 3 SoA pointers for Lua (CPU side)
+float *g_ptrX = NULL, *g_ptrY = NULL, *g_ptrZ = NULL;
+
+// The single AoS pointer for Vulkan (Mapped GPU side)
+VertexAoS* g_mappedAoS = NULL;
 GLFWwindow* g_window = NULL;
 lua_State* g_L = NULL; 
 double g_last_mouse_x = 0.0, g_last_mouse_y = 0.0;
@@ -175,43 +183,36 @@ int main() {
     VkDevice device; vkCreateDevice(chosenGPU, &deviceCreateInfo, NULL, &device);
     VkQueue graphicsQueue; vkGetDeviceQueue(device, qIndex, 0, &graphicsQueue);
 
-    // ========================================================
-    // ALLOCATE 3 SEPARATE SOA BUFFERS
-    // ========================================================
-    uint32_t maxVerts = 4000000; // MUST Match memory.lua!
-    VkDeviceSize bufSize = maxVerts * sizeof(float);
-    VkBuffer bufX, bufY, bufZ;
-    VkDeviceMemory memX, memY, memZ;
-    createSoABuffer(device, chosenGPU, bufSize, &bufX, &memX, &g_ptrX);
-    createSoABuffer(device, chosenGPU, bufSize, &bufY, &memY, &g_ptrY);
-    createSoABuffer(device, chosenGPU, bufSize, &bufZ, &memZ, &g_ptrZ);
+uint32_t maxVerts = 4000000; 
 
-    // ========================================================
-    // DESCRIPTORS (3 BINDINGS NOW!)
-    // ========================================================
-    VkDescriptorSetLayoutBinding bindings[3] = {{0}};
-    for(int i=0; i<3; i++) {
-        bindings[i].binding = i; bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; bindings[i].descriptorCount = 1; bindings[i].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    }
-    VkDescriptorSetLayoutCreateInfo layoutInfo = {0}; layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO; layoutInfo.bindingCount = 3; layoutInfo.pBindings = bindings;
-    VkDescriptorSetLayout descriptorSetLayout; vkCreateDescriptorSetLayout(device, &layoutInfo, NULL, &descriptorSetLayout);
+    // 1. Allocate fast CPU memory for Lua to write to (SoA)
+    g_ptrX = malloc(maxVerts * sizeof(float));
+    g_ptrY = malloc(maxVerts * sizeof(float));
+    g_ptrZ = malloc(maxVerts * sizeof(float));
 
-    VkDescriptorPoolSize poolSize = {0}; poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; poolSize.descriptorCount = 3;
-    VkDescriptorPoolCreateInfo poolInfo = {0}; poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO; poolInfo.poolSizeCount = 1; poolInfo.pPoolSizes = &poolSize; poolInfo.maxSets = 1;
-    VkDescriptorPool descriptorPool; vkCreateDescriptorPool(device, &poolInfo, NULL, &descriptorPool);
-
-    VkDescriptorSetAllocateInfo allocSetInfo = {0}; allocSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO; allocSetInfo.descriptorPool = descriptorPool; allocSetInfo.descriptorSetCount = 1; allocSetInfo.pSetLayouts = &descriptorSetLayout;
-    VkDescriptorSet descriptorSet; vkAllocateDescriptorSets(device, &allocSetInfo, &descriptorSet);
-
-    VkBuffer buffers[3] = {bufX, bufY, bufZ};
-    VkDescriptorBufferInfo dBufferInfos[3] = {{0}};
-    VkWriteDescriptorSet descriptorWrites[3] = {{0}};
-    for(int i=0; i<3; i++) {
-        dBufferInfos[i].buffer = buffers[i]; dBufferInfos[i].offset = 0; dBufferInfos[i].range = VK_WHOLE_SIZE;
-        descriptorWrites[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; descriptorWrites[i].dstSet = descriptorSet; descriptorWrites[i].dstBinding = i; descriptorWrites[i].dstArrayElement = 0; descriptorWrites[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; descriptorWrites[i].descriptorCount = 1; descriptorWrites[i].pBufferInfo = &dBufferInfos[i];
-    }
-    vkUpdateDescriptorSets(device, 3, descriptorWrites, 0, NULL);
-
+    // 2. Allocate ONE Host-Visible Vulkan buffer for the GPU (AoS)
+    VkDeviceSize aosSize = maxVerts * sizeof(VertexAoS);
+    VkBuffer bufAoS;
+    VkDeviceMemory memAoS;
+    
+    VkBufferCreateInfo vboInfo = {0}; 
+    vboInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; 
+    vboInfo.size = aosSize; 
+    // IMPORTANT: Note the VERTEX_BUFFER bit!
+    vboInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; 
+    vkCreateBuffer(device, &vboInfo, NULL, &bufAoS);
+    
+    VkMemoryRequirements reqs; 
+    vkGetBufferMemoryRequirements(device, bufAoS, &reqs);
+    
+    VkMemoryAllocateInfo alloc = {0}; 
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; 
+    alloc.allocationSize = reqs.size; 
+    alloc.memoryTypeIndex = findMemoryType(chosenGPU, reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(device, &alloc, NULL, &memAoS);
+    vkBindBufferMemory(device, bufAoS, memAoS, 0);
+    vkMapMemory(device, memAoS, 0, aosSize, 0, (void**)&g_mappedAoS);
+    // DELETED VkDescriptorSetLayout, VkDescriptorPool, VkDescriptorSet and vkUpdateDescriptorSets
     VkSurfaceKHR surface; glfwCreateWindowSurface(instance, g_window, NULL, &surface);
     VkSurfaceCapabilitiesKHR surfaceCaps; vkGetPhysicalDeviceSurfaceCapabilitiesKHR(chosenGPU, surface, &surfaceCaps);
     VkExtent2D swapchainExtent = surfaceCaps.currentExtent;
@@ -294,12 +295,23 @@ int main() {
     shaderStages[1].module = fragModule; 
     shaderStages[1].pName  = "main";
 
-    // ========================================================
-    // 2. FIXED FUNCTION STATE (The "Dumb" Hardware Configuration)
-    // ========================================================
-    // Empty Vertex Input - Our SoA SSBOs handle this natively!
+    VkVertexInputBindingDescription bindingDesc = {0};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(VertexAoS); // The 12-byte stride!
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc = {0};
+    attrDesc.binding = 0;
+    attrDesc.location = 0;
+    attrDesc.format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc.offset = 0; // Starts at the beginning of the struct
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo = {0}; 
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
+    vertexInputInfo.vertexAttributeDescriptionCount = 1;
+    vertexInputInfo.pVertexAttributeDescriptions = &attrDesc;
     
     // Topology: Now set to Triangles!
     VkPipelineInputAssemblyStateCreateInfo inputAssembly = {0}; 
@@ -509,6 +521,15 @@ int main() {
         if (lua_isnumber(L, -1)) { draw_count = lua_tointeger(L, -1); }
         lua_pop(L, 1);
 
+        // --- THE "ZIP" TRANSLATION ---
+        // If draw_count is particles, and each has 12 vertices (4 triangles)
+        int total_vertices = draw_count * 12; 
+        
+        for(int i = 0; i < total_vertices; i++) {
+            g_mappedAoS[i].x = g_ptrX[i];
+            g_mappedAoS[i].y = g_ptrY[i];
+            g_mappedAoS[i].z = g_ptrZ[i];
+        }
         // ========================================================
         // 1. FRAME ACQUISITION & COMMAND BUFFER SETUP
         // ========================================================
@@ -608,28 +629,16 @@ int main() {
         // Bind the Pipeline (The shaders and hardware state)
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-        // Bind the Descriptor Sets (Your 3 SoA SSBOs for X, Y, Z)
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &descriptorSet, 0, NULL);
+        // Bind our new Vertex Buffer!
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, &bufAoS, offsets);
 
-        // ========================================================
-        // 5. PUSH CONSTANTS & THE INSTANCED DRAW CALL
-        // ========================================================
+        // Push Camera Matrix
+        vkCmdPushConstants(commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(CameraPushConstants), &g_cam_pc);
 
-        // Push the 64-byte Camera Matrix to the Vertex Shader
-        vkCmdPushConstants(
-            commandBuffer, 
-            graphicsPipelineLayout, 
-            VK_SHADER_STAGE_VERTEX_BIT, 
-            0, 
-            sizeof(CameraPushConstants), 
-            &g_cam_pc
-        );
-
-        if (draw_count > 0) {
-            // PARAMETERS: (commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance)
-            // 12 vertices = 4 triangles (a complete tetrahedron)
-            // draw_count = number of instances (particles)
-            vkCmdDraw(commandBuffer, 12, draw_count, 0, 0);
+        if (total_vertices > 0) {
+            // Standard non-instanced draw: (commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance)
+            vkCmdDraw(commandBuffer, total_vertices, 1, 0, 0);
         }
 
         vkCmdEndRendering(commandBuffer);

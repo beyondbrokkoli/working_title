@@ -49,7 +49,7 @@ void main() {
     vec3 localPos = tet[localIdx];
     
     // Scale the tetrahedron and place it at the particle's center
-    float particleScale = 0.5; // Adjust this to make your swarm bigger/smaller
+    float particleScale = 2.0; // Adjust this to make your swarm bigger/smaller
     vec3 worldPos = center + (localPos * particleScale);
     
     v_WorldPos = worldPos;

@@ -153,7 +153,7 @@ function love_update(dt)
     local ptrX = Engine.getVRAM_X()
     local ptrY = Engine.getVRAM_Y()
     local ptrZ = Engine.getVRAM_Z()
-    VibeMath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, time, 15.0, 5.0)
+    VibeMath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, 0.0, 15.0, 5.0)
 end
 function OLD_DEPRECATED_love_update(dt)
     dt = math.min(dt, 0.033)

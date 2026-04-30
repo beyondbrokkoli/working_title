@@ -123,7 +123,7 @@ function love_update(dt)
     -- 5.0 is the Minor Radius (thickness of the tube)
     VibeMath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, time, 15.0, 5.0)
 end
-function OLD_love_update(dt)
+function OLD_DEPRECATED_love_update(dt)
     dt = math.min(dt, 0.033)
     global_time = global_time + dt
 

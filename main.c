@@ -317,19 +317,78 @@ int main() {
     gfxLayoutInfo.pushConstantRangeCount = 1; 
     gfxLayoutInfo.pPushConstantRanges    = &gfxPushRange;
     
-    VkPipelineLayout graphicsPipelineLayout; 
+    // ========================================================
+    // 5. PIPELINE LAYOUT (Finalizing the bridge)
+    // ========================================================
+    VkPipelineLayout graphicsPipelineLayout;
     vkCreatePipelineLayout(device, &gfxLayoutInfo, NULL, &graphicsPipelineLayout);
 
-    VkPipelineRenderingCreateInfo renderingCreateInfo = {0}; renderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO; renderingCreateInfo.colorAttachmentCount = 1; renderingCreateInfo.pColorAttachmentFormats = &swapchainInfo.imageFormat;
-    VkGraphicsPipelineCreateInfo gfxPipelineInfo = {0}; gfxPipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO; gfxPipelineInfo.pNext = &renderingCreateInfo; gfxPipelineInfo.stageCount = 2; gfxPipelineInfo.pStages = shaderStages; gfxPipelineInfo.pVertexInputState = &vertexInputInfo; gfxPipelineInfo.pInputAssemblyState = &inputAssembly; gfxPipelineInfo.pViewportState = &viewportState; gfxPipelineInfo.pRasterizationState = &rasterizer; gfxPipelineInfo.pMultisampleState = &multisampling; gfxPipelineInfo.pColorBlendState = &colorBlending; gfxPipelineInfo.pDynamicState = &dynamicStateInfo; gfxPipelineInfo.layout = graphicsPipelineLayout;
-    VkPipeline graphicsPipeline; vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gfxPipelineInfo, NULL, &graphicsPipeline);
+    // ========================================================
+    // 6. PIPELINE RENDERING INFO (Dynamic Rendering Link)
+    // ========================================================
+    VkPipelineRenderingCreateInfo renderingCreateInfo = {0}; 
+    renderingCreateInfo.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO; 
+    renderingCreateInfo.colorAttachmentCount    = 1; 
+    renderingCreateInfo.pColorAttachmentFormats = &swapchainInfo.imageFormat;
+    
+    // --- FIX #1: The Missing Depth Format ---
+    // This tells Dynamic Rendering: "Hey, expect a 32-bit float depth buffer here!"
+    renderingCreateInfo.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT; 
 
-    VkCommandPoolCreateInfo cmdPoolInfo = {0}; cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; cmdPoolInfo.queueFamilyIndex = qIndex; cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    VkCommandPool commandPool; vkCreateCommandPool(device, &cmdPoolInfo, NULL, &commandPool);
-    VkCommandBufferAllocateInfo cmdAllocInfo = {0}; cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO; cmdAllocInfo.commandPool = commandPool; cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cmdAllocInfo.commandBufferCount = 1;
-    VkCommandBuffer commandBuffer; vkAllocateCommandBuffers(device, &cmdAllocInfo, &commandBuffer);
+    // ========================================================
+    // 7. GRAPHICS PIPELINE CREATION (The Master State Object)
+    // ========================================================
+    VkGraphicsPipelineCreateInfo gfxPipelineInfo = {0}; 
+    gfxPipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO; 
+    gfxPipelineInfo.pNext               = &renderingCreateInfo; // <--- Connects Dynamic Rendering formats
+    gfxPipelineInfo.stageCount          = 2; 
+    gfxPipelineInfo.pStages             = shaderStages; 
+    gfxPipelineInfo.pVertexInputState   = &vertexInputInfo; 
+    gfxPipelineInfo.pInputAssemblyState = &inputAssembly; 
+    gfxPipelineInfo.pViewportState      = &viewportState; 
+    gfxPipelineInfo.pRasterizationState = &rasterizer; 
+    gfxPipelineInfo.pMultisampleState   = &multisampling; 
+    
+    // --- FIX #2: The Missing Depth Silicon State ---
+    // This connects the VkPipelineDepthStencilStateCreateInfo we made earlier!
+    gfxPipelineInfo.pDepthStencilState  = &depthStencil;        
+    
+    gfxPipelineInfo.pColorBlendState    = &colorBlending; 
+    gfxPipelineInfo.pDynamicState       = &dynamicStateInfo; 
+    gfxPipelineInfo.layout              = graphicsPipelineLayout;
+    
+    VkPipeline graphicsPipeline; 
+    vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gfxPipelineInfo, NULL, &graphicsPipeline);
 
-    VkSemaphore imageAvailableSemaphore; VkSemaphoreCreateInfo semaInfo = {0}; semaInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO; vkCreateSemaphore(device, &semaInfo, NULL, &imageAvailableSemaphore);
+    // ========================================================
+    // 8. COMMAND POOL & BUFFERS (The instruction allocators)
+    // ========================================================
+    VkCommandPoolCreateInfo cmdPoolInfo = {0}; 
+    cmdPoolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; 
+    cmdPoolInfo.queueFamilyIndex = qIndex; 
+    // This flag is crucial: It allows us to vkResetCommandBuffer every frame in the loop!
+    cmdPoolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    
+    VkCommandPool commandPool; 
+    vkCreateCommandPool(device, &cmdPoolInfo, NULL, &commandPool);
+    
+    VkCommandBufferAllocateInfo cmdAllocInfo = {0}; 
+    cmdAllocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO; 
+    cmdAllocInfo.commandPool        = commandPool; 
+    cmdAllocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY; 
+    cmdAllocInfo.commandBufferCount = 1;
+    
+    VkCommandBuffer commandBuffer; 
+    vkAllocateCommandBuffers(device, &cmdAllocInfo, &commandBuffer);
+
+    // ========================================================
+    // 9. SYNCHRONIZATION (Semaphores)
+    // ========================================================
+    VkSemaphoreCreateInfo semaInfo = {0}; 
+    semaInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO; 
+    
+    VkSemaphore imageAvailableSemaphore; 
+    vkCreateSemaphore(device, &semaInfo, NULL, &imageAvailableSemaphore);
 
     lua_getglobal(L, "love_load");
     if (lua_isfunction(L, -1)) { if (lua_pcall(L, 0, 0, 0) != LUA_OK) { printf("[LUA ERROR] %s\n", lua_tostring(L, -1)); } } lua_pop(L, 1);

@@ -116,10 +116,9 @@ function love_update(dt)
     -- 1. Let Lua handle WASD and mouse movement
     CameraModule.Tick(dt)
 
-    -- 2. Build the Matrix and send to Vulkan
+    -- 2. Build the Matrix and send to Vulkan directly! (No local variable!)
     local aspect = CANVAS_W / CANVAS_H
-    local matrix = CameraModule.GetViewProjectionMatrix(aspect)
-    Engine.setCameraMatrix(matrix)
+    Engine.setCameraMatrix(CameraModule.GetViewProjectionMatrix(aspect))
 
     -- 3. THE ELECTRICAL SHORTCUT (Physics Bypass)
     local ptrX = Engine.getVRAM_X()

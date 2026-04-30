@@ -112,15 +112,19 @@ function love_load()
 end
 function love_update(dt)
     time = time + dt
-    
+
+    -- 1. Let Lua handle WASD and mouse movement
+    CameraModule.Tick(dt)
+
+    -- 2. Build the Matrix and send to Vulkan
+    local aspect = CANVAS_W / CANVAS_H
+    local matrix = CameraModule.GetViewProjectionMatrix(aspect)
+    Engine.setCameraMatrix(matrix)
+
+    -- 3. THE ELECTRICAL SHORTCUT (Physics Bypass)
     local ptrX = Engine.getVRAM_X()
     local ptrY = Engine.getVRAM_Y()
     local ptrZ = Engine.getVRAM_Z()
-
-    -- THE ELECTRICAL SHORTCUT
-    -- Bypassing physics, forcing the VRAM to become a 3D Donut
-    -- 15.0 is the Major Radius (size of the ring)
-    -- 5.0 is the Minor Radius (thickness of the tube)
     VibeMath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, time, 15.0, 5.0)
 end
 function OLD_DEPRECATED_love_update(dt)

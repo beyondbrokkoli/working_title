@@ -167,71 +167,6 @@ EXPORT void vmath_set_resolution(int w, int h, uint32_t* screen_ptr, float* z_bu
     g_canvas_w = w; g_canvas_h = h; g_half_w = w * 0.5f; g_half_h = h * 0.5f;
 }
 
-// ========================================================================
-// MEMORY & PROJECTION (Now Writes DIRECTLY to Vulkan VRAM!)
-// ========================================================================
-EXPORT void vmath_project_vertices(
-    int count,
-    float* lx, float* ly, float* lz,
-    float* px, float* py, float* pz, bool* valid,
-    float ox, float oy, float oz, float rx, float ry, float rz, float ux, float uy, float uz, float fx, float fy, float fz,
-    float cpx, float cpy, float cpz, float cfw_x, float cfw_y, float cfw_z, float crt_x, float crt_z, float cup_x, float cup_y, float cup_z, float cam_fov, float half_w, float half_h
-) {
-    __m256 v_ox = _mm256_set1_ps(ox); __m256 v_oy = _mm256_set1_ps(oy); __m256 v_oz = _mm256_set1_ps(oz);
-    __m256 v_rx = _mm256_set1_ps(rx); __m256 v_ry = _mm256_set1_ps(ry); __m256 v_rz = _mm256_set1_ps(rz);
-    __m256 v_ux = _mm256_set1_ps(ux); __m256 v_uy = _mm256_set1_ps(uy); __m256 v_uz = _mm256_set1_ps(uz);
-    __m256 v_fx = _mm256_set1_ps(fx); __m256 v_fy = _mm256_set1_ps(fy); __m256 v_fz = _mm256_set1_ps(fz);
-
-    __m256 v_cpx = _mm256_set1_ps(cpx); __m256 v_cpy = _mm256_set1_ps(cpy); __m256 v_cpz = _mm256_set1_ps(cpz);
-    __m256 v_cfwx = _mm256_set1_ps(cfw_x); __m256 v_cfwy = _mm256_set1_ps(cfw_y); __m256 v_cfwz = _mm256_set1_ps(cfw_z);
-    __m256 v_crtx = _mm256_set1_ps(crt_x); __m256 v_crtz = _mm256_set1_ps(crt_z);
-    __m256 v_cupx = _mm256_set1_ps(cup_x); __m256 v_cupy = _mm256_set1_ps(cup_y); __m256 v_cupz = _mm256_set1_ps(cup_z);
-    __m256 v_cam_fov = _mm256_set1_ps(cam_fov);
-    __m256 v_half_w = _mm256_set1_ps(half_w); __m256 v_half_h = _mm256_set1_ps(half_h);
-    __m256 v_two = _mm256_set1_ps(2.0f);
-
-    int i = 0;
-    for (; i <= count - 8; i += 8) {
-        __m256 v_lx = _mm256_loadu_ps(&lx[i]); __m256 v_ly = _mm256_loadu_ps(&ly[i]); __m256 v_lz = _mm256_loadu_ps(&lz[i]);
-
-        __m256 v_wx = _mm256_fmadd_ps(v_lz, v_fx, _mm256_fmadd_ps(v_ly, v_ux, _mm256_fmadd_ps(v_lx, v_rx, v_ox)));
-        __m256 v_wy = _mm256_fmadd_ps(v_lz, v_fy, _mm256_fmadd_ps(v_ly, v_uy, _mm256_fmadd_ps(v_lx, v_ry, v_oy)));
-        __m256 v_wz = _mm256_fmadd_ps(v_lz, v_fz, _mm256_fmadd_ps(v_ly, v_uz, _mm256_fmadd_ps(v_lx, v_rz, v_oz)));
-
-        __m256 v_vdx = _mm256_sub_ps(v_wx, v_cpx); __m256 v_vdy = _mm256_sub_ps(v_wy, v_cpy); __m256 v_vdz = _mm256_sub_ps(v_wz, v_cpz);
-        __m256 v_cz = _mm256_fmadd_ps(v_vdz, v_cfwz, _mm256_fmadd_ps(v_vdy, v_cfwy, _mm256_mul_ps(v_vdx, v_cfwx)));
-
-        __m256 v_mask = _mm256_cmp_ps(v_cz, _mm256_set1_ps(0.1f), _CMP_GE_OQ);
-        int bitmask = _mm256_movemask_ps(v_mask);
-
-        __m256 v_rcp = _mm256_rcp_ps(v_cz);
-        __m256 v_rcp_refined = _mm256_mul_ps(v_rcp, _mm256_fnmadd_ps(v_cz, v_rcp, v_two));
-        __m256 v_f = _mm256_mul_ps(v_cam_fov, v_rcp_refined);
-
-        __m256 v_px = _mm256_add_ps(v_half_w, _mm256_mul_ps(v_f, _mm256_add_ps(_mm256_mul_ps(v_vdx, v_crtx), _mm256_mul_ps(v_vdz, v_crtz))));
-        __m256 v_py = _mm256_add_ps(v_half_h, _mm256_mul_ps(v_f, _mm256_fmadd_ps(v_vdz, v_cupz, _mm256_fmadd_ps(v_vdy, v_cupy, _mm256_mul_ps(v_vdx, v_cupx)))));
-
-        // THESE POINTERS ARE DIRECTLY CONNECTED TO VULKAN VRAM NOW!
-        _mm256_storeu_ps(&px[i], v_px);
-        _mm256_storeu_ps(&py[i], v_py);
-        _mm256_storeu_ps(&pz[i], _mm256_mul_ps(v_cz, _mm256_set1_ps(1.004f)));
-
-        valid[i+0] = (bitmask & (1 << 0)) != 0; valid[i+1] = (bitmask & (1 << 1)) != 0; valid[i+2] = (bitmask & (1 << 2)) != 0; valid[i+3] = (bitmask & (1 << 3)) != 0;
-        valid[i+4] = (bitmask & (1 << 4)) != 0; valid[i+5] = (bitmask & (1 << 5)) != 0; valid[i+6] = (bitmask & (1 << 6)) != 0; valid[i+7] = (bitmask & (1 << 7)) != 0;
-    }
-
-    for (; i < count; i++) {
-        float temp_wx = ox + lx[i]*rx + ly[i]*ux + lz[i]*fx; float temp_wy = oy + lx[i]*ry + ly[i]*uy + lz[i]*fy; float temp_wz = oz + lx[i]*rz + ly[i]*uz + lz[i]*fz;
-        float vdx = temp_wx - cpx; float vdy = temp_wy - cpy; float vdz = temp_wz - cpz;
-        float cz = vdx*cfw_x + vdy*cfw_y + vdz*cfw_z;
-
-        if (cz < 0.1f) { valid[i] = false; } else {
-            float f = cam_fov / cz; 
-            px[i] = half_w + (vdx*crt_x + vdz*crt_z) * f; py[i] = half_h + (vdx*cup_x + vdy*cup_y + vdz*cup_z) * f; pz[i] = cz * 1.004f;
-            valid[i] = true;
-        }
-    }
-}
 
 // ========================================================================
 // ALL PHYSICS KERNELS (Bundled into a collapsed region for brevity)
@@ -963,13 +898,7 @@ EXPORT void vmath_execute_queue(int command_count, float time, float dt, int rea
             float fx = g_mem->Obj_FWX[id], fy = g_mem->Obj_FWY[id], fz = g_mem->Obj_FWZ[id];
             int vStart = g_mem->Obj_VertStart[id], vCount = g_mem->Obj_VertCount[id];
 
-            // Project directly into Vert_PX, Vert_PY, Vert_PZ!
-            vmath_project_vertices(
-                vCount,
-                g_mem->Vert_LX + vStart, g_mem->Vert_LY + vStart, g_mem->Vert_LZ + vStart,
-                g_mem->Vert_PX + vStart, g_mem->Vert_PY + vStart, g_mem->Vert_PZ + vStart, g_mem->Vert_Valid + vStart,
-                ox, oy, oz, rx, ry, rz, ux, uy, uz, fx, fy, fz,
-                cpx, cpy, cpz, cfw_x, cfw_y, cfw_z, crt_x, crt_z, cup_x, cup_y, cup_z, cam_fov, g_half_w, g_half_h
+            // REMOVED OLD CALLS
             );
         }
     }

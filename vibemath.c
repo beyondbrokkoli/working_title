@@ -237,77 +237,15 @@ EXPORT void vmath_project_vertices(
 // ALL PHYSICS KERNELS (Bundled into a collapsed region for brevity)
 // ========================================================================
 
-// Extremely dirty, fast AVX2 Sine approximation (Range -PI to PI)
-// sin(x) ≈ x - x^3/6 + x^5/120
-static inline __m256 _mm256_fast_sin_ps(__m256 x) {
-    __m256 x2 = _mm256_mul_ps(x, x);
-    __m256 x3 = _mm256_mul_ps(x2, x);
-    __m256 x5 = _mm256_mul_ps(x3, x2);
-    
-    __m256 c1 = _mm256_set1_ps(-0.16666667f); // -1/6
-    __m256 c2 = _mm256_set1_ps(0.00833333f);  // 1/120
-    
-    __m256 res = _mm256_fmadd_ps(x3, c1, x);
-    res = _mm256_fmadd_ps(x5, c2, res);
-    return res;
-}
-
-// Fast Cosine: cos(x) = sin(x + PI/2)
-static inline __m256 _mm256_fast_cos_ps(__m256 x) {
-    __m256 half_pi = _mm256_set1_ps(1.57079632f);
-    __m256 shifted = _mm256_add_ps(x, half_pi);
-    // Note: Needs a quick modulo/wrap if it exceeds PI in a real implementation
-    return _mm256_fast_sin_ps(shifted);
-}
-
 EXPORT void vmath_generate_torus(
     int count, 
-    float* lx, float* ly, float* lz, // Your SoA VRAM Pointers!
+    float* lx, float* ly, float* lz, 
     float time, float major_R, float minor_r
 ) {
-    __m256 v_R = _mm256_set1_ps(major_R);
-    __m256 v_r = _mm256_set1_ps(minor_r);
-    
-    // We will use the index 'i' to generate pseudo-random angles for theta and phi
-    __m256 v_magic_theta = _mm256_set1_ps(0.12345f);
-    __m256 v_magic_phi   = _mm256_set1_ps(0.54321f);
-    __m256 v_time        = _mm256_set1_ps(time);
-
-    int i = 0;
-    
-    // 8-Wide SIMD Geometry Generation!
-    for (; i <= count - 8; i += 8) {
-        // Create an array of indices [i, i+1, i+2... i+7]
-        __m256 v_idx = _mm256_set_ps(i+7, i+6, i+5, i+4, i+3, i+2, i+1, i);
-        
-        // Generate continuous angles based on index and time
-        __m256 v_theta = _mm256_fmadd_ps(v_idx, v_magic_theta, v_time);
-        __m256 v_phi   = _mm256_fmadd_ps(v_idx, v_magic_phi, _mm256_mul_ps(v_time, _mm256_set1_ps(0.5f)));
-
-        // Calculate Sines and Cosines
-        __m256 cos_theta = _mm256_fast_cos_ps(v_theta);
-        __m256 sin_theta = _mm256_fast_sin_ps(v_theta);
-        __m256 cos_phi   = _mm256_fast_cos_ps(v_phi);
-        __m256 sin_phi   = _mm256_fast_sin_ps(v_phi);
-
-        // Core Torus Math: (R + r * cos(theta))
-        __m256 tube_offset = _mm256_fmadd_ps(v_r, cos_theta, v_R);
-
-        // Calculate X, Y, Z
-        __m256 v_x = _mm256_mul_ps(tube_offset, cos_phi);
-        __m256 v_y = _mm256_mul_ps(tube_offset, sin_phi);
-        __m256 v_z = _mm256_mul_ps(v_r, sin_theta);
-
-        // Write directly to PCI-E Mapped VRAM!
-        _mm256_storeu_ps(&lx[i], v_x);
-        _mm256_storeu_ps(&ly[i], v_y);
-        _mm256_storeu_ps(&lz[i], v_z);
-    }
-
-    // Standard scalar tail loop
-    for (; i < count; i++) {
-        float theta = (float)i * 0.12345f + time;
-        float phi   = (float)i * 0.54321f + (time * 0.5f);
+    for (int i = 0; i < count; i++) {
+        // fmodf safely wraps the angles to a standard 0 to 2*PI circle!
+        float theta = fmodf((float)i * 0.12345f + time, 2.0f * (float)M_PI);
+        float phi   = fmodf((float)i * 0.54321f + (time * 0.5f), 2.0f * (float)M_PI);
         
         float tube = major_R + minor_r * cosf(theta);
         

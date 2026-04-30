@@ -378,8 +378,8 @@ uint32_t maxVerts = 4000000;
 
     VkPipelineLayoutCreateInfo gfxLayoutInfo = {0}; 
     gfxLayoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO; 
-    gfxLayoutInfo.setLayoutCount         = 1; 
-    gfxLayoutInfo.pSetLayouts            = &descriptorSetLayout; // Binds your 3 SSBOs
+    gfxLayoutInfo.setLayoutCount         = 0;     // <--- CHANGE FROM 1
+    gfxLayoutInfo.pSetLayouts            = NULL;  // <--- CHANGE FROM &descriptorSetLayout
     gfxLayoutInfo.pushConstantRangeCount = 1; 
     gfxLayoutInfo.pPushConstantRanges    = &gfxPushRange;
     
@@ -667,11 +667,7 @@ uint32_t maxVerts = 4000000;
     // 3. Shaders (Note: You can actually do this right after vkCreateGraphicsPipelines!)
     vkDestroyShaderModule(device, vertModule, NULL);
     vkDestroyShaderModule(device, fragModule, NULL);
-
-    // 4. Descriptors
-    vkDestroyDescriptorPool(device, descriptorPool, NULL);
-    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, NULL);
-
+    // 4. DELETED
     // 5. Command Pool (This automatically frees the command buffers inside it)
     vkDestroyCommandPool(device, commandPool, NULL);
 
@@ -690,10 +686,14 @@ uint32_t maxVerts = 4000000;
     free(swapchainImages);
     vkDestroySwapchainKHR(device, swapchain, NULL);
 
-    // 8. FREE 3 VRAM BUFFERS (Your SoA Pipeline)
-    vkUnmapMemory(device, memX); vkDestroyBuffer(device, bufX, NULL); vkFreeMemory(device, memX, NULL);
-    vkUnmapMemory(device, memY); vkDestroyBuffer(device, bufY, NULL); vkFreeMemory(device, memY, NULL);
-    vkUnmapMemory(device, memZ); vkDestroyBuffer(device, bufZ, NULL); vkFreeMemory(device, memZ, NULL);
+    // 8. FREE VRAM BUFFERS AND MALLOC
+    vkUnmapMemory(device, memAoS); 
+    vkDestroyBuffer(device, bufAoS, NULL); 
+    vkFreeMemory(device, memAoS, NULL);
+    
+    free(g_ptrX);
+    free(g_ptrY);
+    free(g_ptrZ);
 
     // 9. Core Vulkan Context
     vkDestroyDevice(device, NULL);

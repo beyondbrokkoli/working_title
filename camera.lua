@@ -2,9 +2,6 @@
 local ffi = require("ffi")
 local max, min, cos, sin, tan = math.max, math.min, math.cos, math.sin, math.tan
 
--- Pre-allocate a 16-float array for the matrix so we don't trigger Garbage Collection every frame!
-local viewProjMatrix = ffi.new("float[16]")
-
 return function(MainCamera)
     local CameraModule = {}
 
@@ -71,11 +68,10 @@ return function(MainCamera)
 
         -- 1. Build Perspective Matrix
         local f = 1.0 / tan(fov * 0.5)
-        local proj00 = f / aspect
-        local proj11 = -f -- Inverted Y for Vulkan!
-        local proj22 = zFar / (zNear - zFar)
-        local proj23 = -1.0
-        local proj32 = -(zFar * zNear) / (zFar - zNear)
+        local p00 = f / aspect
+        local p11 = -f -- Inverted Y for Vulkan!
+        local p22 = zFar / (zNear - zFar)
+        local p23 = (zFar * zNear) / (zNear - zFar) -- Fixed sign error here
 
         -- 2. Build View Matrix using existing Forward, Right, Up vectors
         local rx, ry, rz = MainCamera.rtx, MainCamera.rty, MainCamera.rtz
@@ -86,30 +82,31 @@ return function(MainCamera)
         -- Translation (Dot products of vectors and position)
         local tx = -(rx * cx + ry * cy + rz * cz)
         local ty = -(ux * cx + uy * cy + uz * cz)
-        local tz =  (fx * cx + fy * cy + fz * cz) -- Forward is -Z in Vulkan view space
+        local tz =  (fx * cx + fy * cy + fz * cz)
 
-        -- 3. Multiply Proj * View directly into the 16-float array
-        viewProjMatrix[0]  = proj00 * rx
-        viewProjMatrix[1]  = proj11 * ux
-        viewProjMatrix[2]  = proj22 * -fx + proj23 * tx
-        viewProjMatrix[3]  = -fx
-        
-        viewProjMatrix[4]  = proj00 * ry
-        viewProjMatrix[5]  = proj11 * uy
-        viewProjMatrix[6]  = proj22 * -fy + proj23 * ty
-        viewProjMatrix[7]  = -fy
-        
-        viewProjMatrix[8]  = proj00 * rz
-        viewProjMatrix[9]  = proj11 * uz
-        viewProjMatrix[10] = proj22 * -fz + proj23 * tz
-        viewProjMatrix[11] = -fz
-        
-        viewProjMatrix[12] = proj00 * tx
-        viewProjMatrix[13] = proj11 * ty
-        viewProjMatrix[14] = proj22 * tz + proj23 * 1.0
-        viewProjMatrix[15] = tz
+        -- 3. Multiply Proj * View and return exactly 16 numbers
+        -- Column 0
+        local m0  = p00 * rx
+        local m1  = p11 * ux
+        local m2  = p22 * -fx
+        local m3  = fx
+        -- Column 1
+        local m4  = p00 * ry
+        local m5  = p11 * uy
+        local m6  = p22 * -fy
+        local m7  = fy
+        -- Column 2
+        local m8  = p00 * rz
+        local m9  = p11 * uz
+        local m10 = p22 * -fz
+        local m11 = fz
+        -- Column 3
+        local m12 = p00 * tx
+        local m13 = p11 * ty
+        local m14 = p22 * tz + p23 -- Fixed column addition here
+        local m15 = -tz
 
-        return viewProjMatrix
+        return m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15
     end
 
     return CameraModule

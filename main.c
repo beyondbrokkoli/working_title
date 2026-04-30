@@ -64,17 +64,18 @@ lua_State* g_L = NULL;
 double g_last_mouse_x = 0.0, g_last_mouse_y = 0.0;
 int g_first_mouse = 1;
 
-// Add this helper function:
+// ========================================================
+// 3. DEFINE THE LUA BRIDGE THIRD
+// ========================================================
 static int l_setCameraMatrix(lua_State* L) {
-    // Lua passes us an ffi float[16] pointer (which is userdata)
-    float* matrix = (float*)lua_touserdata(L, 1);
-    if (matrix) {
-        for (int i = 0; i < 16; i++) {
-            g_cam_pc.viewProj[i] = matrix[i];
-        }
+    // Read 16 standard numbers directly off the Lua stack.
+    // Completely immune to FFI pointer metadata issues!
+    for (int i = 0; i < 16; i++) {
+        g_cam_pc.viewProj[i] = (float)lua_tonumber(L, i + 1);
     }
     return 0;
 }
+
 static int l_isKeyDown(lua_State* L) { int key = luaL_checkinteger(L, 1); lua_pushboolean(L, glfwGetKey(g_window, key) == GLFW_PRESS); return 1; }
 static int l_setRelativeMode(lua_State* L) { glfwSetInputMode(g_window, GLFW_CURSOR, lua_toboolean(L, 1) ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL); return 0; }
 // Mimics love.mouse.isDown(button)

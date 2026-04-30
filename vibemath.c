@@ -3,10 +3,15 @@
 #include <stdbool.h>
 #include <math.h>
 
+// ========================================================
+// CROSS-PLATFORM FFI EXPORT MACRO
+// ========================================================
 #ifdef _WIN32
+    // Windows DLL export
     #define EXPORT __declspec(dllexport)
 #else
-    #define EXPORT
+    // Linux/macOS Shared Object export
+    #define EXPORT __attribute__((visibility("default")))
 #endif
 
 #ifndef M_PI
@@ -231,7 +236,6 @@ EXPORT void vmath_project_vertices(
 // ========================================================================
 // ALL PHYSICS KERNELS (Bundled into a collapsed region for brevity)
 // ========================================================================
-#define EXPORT __attribute__((visibility("default")))
 
 // Extremely dirty, fast AVX2 Sine approximation (Range -PI to PI)
 // sin(x) ≈ x - x^3/6 + x^5/120

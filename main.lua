@@ -78,8 +78,6 @@ local DummyZBuffer = ffi.new("float[?]", CANVAS_W * CANVAS_H)
 function love_load()
     print("[LUA] Running love_load...")
     Engine.setRelativeMode(true)
-
-    -- Restore the FOV
     MainCamera.fov = (CANVAS_W / 800) * 600
 
     print("[LUA] Hijacking CPU RAM with RTX 3050 Pointers...")
@@ -91,44 +89,9 @@ function love_load()
     Memory.RenderStruct.Vert_PY = Memory.Arrays.Vert_PY
     Memory.RenderStruct.Vert_PZ = Memory.Arrays.Vert_PZ
 
-    -- ONLY LOAD THE CAMERA
-    Sequence.LoadModule("camera", MainCamera)
-    CameraModule = Sequence.Loaded["camera"]
-    Sequence.RunPhase("Init")
-
-    -- ====================================================
-    -- THE CULLING OF THE GHOSTS
-    -- ====================================================
-    -- Do NOT bind the engine.
-    -- Do NOT load the swarm module.
-    -- Do NOT ignite the thread pool.
-    -- Let the void be silent so the Donut may spin.
-end
-function OLD_DEPRECATED_love_load()
-    print("[LUA] Running love_load...")
-    Engine.setRelativeMode(true)
-
-    -- [THE FIX] Restore the FOV so the CPU stops dividing by zero!
-    MainCamera.fov = (CANVAS_W / 800) * 600
-    -- ========================================================
-    -- [THE FIX] THE VULKAN SOA OVERRIDE
-    -- Vulkan is fully booted! Hijack the Arrays now!
-    -- ========================================================
-    print("[LUA] Hijacking CPU RAM with RTX 3050 Pointers...")
-    Memory.Arrays.Vert_PX = ffi.cast("float*", Engine.getVRAM_X())
-    Memory.Arrays.Vert_PY = ffi.cast("float*", Engine.getVRAM_Y())
-    Memory.Arrays.Vert_PZ = ffi.cast("float*", Engine.getVRAM_Z())
-    
-    -- Lock them into the C Struct!
-    Memory.RenderStruct.Vert_PX = Memory.Arrays.Vert_PX
-    Memory.RenderStruct.Vert_PY = Memory.Arrays.Vert_PY
-    Memory.RenderStruct.Vert_PZ = Memory.Arrays.Vert_PZ
-    -- ========================================================
-
-    -- NOW we bind the permanent memory architecture to C!
+    -- THE SWARM RETURNS
     VibeMath.vmath_bind_engine(Memory.RenderStruct, MainCamera, Memory.Arrays.CommandQueue)
-    VibeMath.vmath_set_resolution(CANVAS_W, CANVAS_H, DummyScreen, DummyZBuffer)
-    
+
     Sequence.LoadModule("camera", MainCamera)
     Sequence.LoadModule("swarm")
     SwarmModule = Sequence.Loaded["swarm"]
@@ -139,41 +102,29 @@ function OLD_DEPRECATED_love_load()
     -- Ignite the Permanent Quad-Core Engine!
     VibeMath.vmath_init_thread_pool()
 end
+
 function love_update(dt)
-    time = time + dt
-
-    -- 1. Let Lua handle WASD and mouse movement
-    CameraModule.Tick(dt)
-
-    -- 2. Build the Matrix and send to Vulkan directly! (No local variable!)
-    local aspect = CANVAS_W / CANVAS_H
-    Engine.setCameraMatrix(CameraModule.GetViewProjectionMatrix(aspect))
-
-    -- 3. THE ELECTRICAL SHORTCUT (Physics Bypass)
-    local ptrX = Engine.getVRAM_X()
-    local ptrY = Engine.getVRAM_Y()
-    local ptrZ = Engine.getVRAM_Z()
-    VibeMath.vmath_generate_torus(DrawCount, ptrX, ptrY, ptrZ, 0.0, 15.0, 5.0)
-end
-function OLD_DEPRECATED_love_update(dt)
     dt = math.min(dt, 0.033)
     global_time = global_time + dt
 
+    -- 1. Camera Logic
+    CameraModule.Tick(dt)
+    local aspect = CANVAS_W / CANVAS_H
+    Engine.setCameraMatrix(CameraModule.GetViewProjectionMatrix(aspect))
+
     Sequence.RunPhase("Tick", dt)
 
-    -- CONSTRUCT THE COMMAND QUEUE
+    -- 2. Build the Physics Queue
     local q = Memory.Arrays.CommandQueue
     local q_len = 0
     local mem = Memory.RenderStruct
 
     q[q_len] = CMD.CLEAR; q_len = q_len + 1
     q[q_len] = CMD.SWARM_APPLY_BASE_PHYSICS; q_len = q_len + 1
-    if love.mouse.isDown(1) then
-        q[q_len] = CMD.SWARM_EXPLOSION_PUSH; q_len = q_len + 1
-    end
-    if love.mouse.isDown(2) then
-        q[q_len] = CMD.SWARM_EXPLOSION_PULL; q_len = q_len + 1
-    end
+    
+    if love.mouse.isDown(1) then q[q_len] = CMD.SWARM_EXPLOSION_PUSH; q_len = q_len + 1 end
+    if love.mouse.isDown(2) then q[q_len] = CMD.SWARM_EXPLOSION_PULL; q_len = q_len + 1 end
+    
     local state = mem.Swarm_State
     if state == 1 then q[q_len] = CMD.SWARM_BUNDLE; q_len = q_len + 1
     elseif state == 2 then q[q_len] = CMD.SWARM_GALAXY; q_len = q_len + 1
@@ -183,23 +134,16 @@ function OLD_DEPRECATED_love_update(dt)
     elseif state == 6 then q[q_len] = CMD.SWARM_PARADOX; q_len = q_len + 1
     end
 
-    q[q_len] = CMD.SWARM_SORT_DEPTH; q_len = q_len + 1
-    q[q_len] = CMD.SWARM_GEN_QUADS; q_len = q_len + 1
-
-    -- Trigger the AVX2 Projection & CPU Rasterizer
-    q[q_len] = CMD.RENDER_CULL; q_len = q_len + 1
-    q[q_len] = 0;               q_len = q_len + 1
+    -- TERMINATE THE QUEUE! No CPU Culling! No Depth Sorting!
+    q[q_len] = 0; q_len = q_len + 1
 
     read_buffer, write_buffer = write_buffer, read_buffer
 
-    -- EXECUTE THE AVX2 BLACK MAGIC
+    -- 3. Execute AVX2 Physics
     VibeMath.vmath_execute_queue(q_len, global_time, dt, read_buffer, write_buffer)
 
-    -- Tell Vulkan EXACTLY how many vertices to draw from VRAM!
-    -- Every particle spawns 4 vertices (a tetrahedron)
     DrawCount = mem.Obj_VertCount[0]
 end
-
 function love_mousemoved(x, y, dx, dy)
     Sequence.RunPhase("MouseMoved", x, y, dx, dy)
 end

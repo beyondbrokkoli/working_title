@@ -20,11 +20,11 @@ static int l_setRelativeMode(lua_State* L) { glfwSetInputMode(g_window, GLFW_CUR
 // Mimics love.mouse.isDown(button)
 static int l_isMouseDown(lua_State* L) {
     int button = luaL_checkinteger(L, 1);
-    
+
     // Love2D uses 1 for Left, 2 for Right. GLFW uses 0 for Left, 1 for Right.
     // We map Love2D's 1-based indexing to GLFW's 0-based indexing.
-    int glfw_button = button - 1; 
-    
+    int glfw_button = button - 1;
+
     int state = glfwGetMouseButton(g_window, glfw_button);
     lua_pushboolean(L, state == GLFW_PRESS);
     return 1;
@@ -75,15 +75,15 @@ char* readShaderFile(const char* filename, size_t* outSize) {
 typedef struct { float w; float h; } ScreenPushConstants;
 
 int main() {
-    lua_State* L = luaL_newstate(); g_L = L; luaL_openlibs(L);                
-    lua_newtable(L); 
-    lua_pushcfunction(L, l_isKeyDown); lua_setfield(L, -2, "isKeyDown");  
+    lua_State* L = luaL_newstate(); g_L = L; luaL_openlibs(L);
+    lua_newtable(L);
+    lua_pushcfunction(L, l_isKeyDown); lua_setfield(L, -2, "isKeyDown");
     lua_pushcfunction(L, l_setRelativeMode); lua_setfield(L, -2, "setRelativeMode");
     lua_pushcfunction(L, l_getVRAM_X); lua_setfield(L, -2, "getVRAM_X");
     lua_pushcfunction(L, l_getVRAM_Y); lua_setfield(L, -2, "getVRAM_Y");
     lua_pushcfunction(L, l_getVRAM_Z); lua_setfield(L, -2, "getVRAM_Z");
     lua_pushcfunction(L, l_isMouseDown); lua_setfield(L, -2, "isMouseDown");
-    lua_setglobal(L, "Engine");        
+    lua_setglobal(L, "Engine");
 
     if (luaL_dofile(L, "main.lua") != LUA_OK) { printf("FATAL: %s\n", lua_tostring(L, -1)); return -1; }
 
@@ -135,14 +135,14 @@ int main() {
     }
     VkDescriptorSetLayoutCreateInfo layoutInfo = {0}; layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO; layoutInfo.bindingCount = 3; layoutInfo.pBindings = bindings;
     VkDescriptorSetLayout descriptorSetLayout; vkCreateDescriptorSetLayout(device, &layoutInfo, NULL, &descriptorSetLayout);
-    
+
     VkDescriptorPoolSize poolSize = {0}; poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; poolSize.descriptorCount = 3;
     VkDescriptorPoolCreateInfo poolInfo = {0}; poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO; poolInfo.poolSizeCount = 1; poolInfo.pPoolSizes = &poolSize; poolInfo.maxSets = 1;
     VkDescriptorPool descriptorPool; vkCreateDescriptorPool(device, &poolInfo, NULL, &descriptorPool);
-    
+
     VkDescriptorSetAllocateInfo allocSetInfo = {0}; allocSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO; allocSetInfo.descriptorPool = descriptorPool; allocSetInfo.descriptorSetCount = 1; allocSetInfo.pSetLayouts = &descriptorSetLayout;
     VkDescriptorSet descriptorSet; vkAllocateDescriptorSets(device, &allocSetInfo, &descriptorSet);
-    
+
     VkBuffer buffers[3] = {bufX, bufY, bufZ};
     VkDescriptorBufferInfo dBufferInfos[3] = {{0}};
     VkWriteDescriptorSet descriptorWrites[3] = {{0}};
@@ -164,30 +164,155 @@ int main() {
         VkImageViewCreateInfo viewInfo = {0}; viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO; viewInfo.image = swapchainImages[i]; viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; viewInfo.format = VK_FORMAT_B8G8R8A8_SRGB; viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; viewInfo.subresourceRange.levelCount = 1; viewInfo.subresourceRange.layerCount = 1;
         vkCreateImageView(device, &viewInfo, NULL, &swapchainImageViews[i]);
     }
+    // ========================================================
+    // CREATE DEPTH BUFFER (For 3D Tetrahedrons)
+    // ========================================================
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT; // Standard 32-bit float depth
+    VkImage depthImage;
+    VkDeviceMemory depthMemory;
+    VkImageView depthImageView;
 
+    VkImageCreateInfo dImgInfo = {0};
+    dImgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    dImgInfo.imageType = VK_IMAGE_TYPE_2D;
+    dImgInfo.extent.width = swapchainExtent.width;
+    dImgInfo.extent.height = swapchainExtent.height;
+    dImgInfo.extent.depth = 1;
+    dImgInfo.mipLevels = 1;
+    dImgInfo.arrayLayers = 1;
+    dImgInfo.format = depthFormat;
+    dImgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    dImgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    dImgInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    dImgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    vkCreateImage(device, &dImgInfo, NULL, &depthImage);
+
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(device, depthImage, &memReqs);
+    // Note: In a real scenario, you'd search for VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    // Assuming you have a helper for this, or just hardcode the memory type index for now.
+    VkMemoryAllocateInfo dAllocInfo = {0};
+    dAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    dAllocInfo.allocationSize = memReqs.size;
+
+    // Quick inline memory type search for DEVICE_LOCAL (VRAM)
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(chosenGPU, &memProperties);
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((memReqs.memoryTypeBits & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            dAllocInfo.memoryTypeIndex = i; break;
+        }
+    }
+    vkAllocateMemory(device, &dAllocInfo, NULL, &depthMemory);
+    vkBindImageMemory(device, depthImage, depthMemory, 0);
+
+    VkImageViewCreateInfo dViewInfo = {0};
+    dViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    dViewInfo.image = depthImage;
+    dViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    dViewInfo.format = depthFormat;
+    dViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    dViewInfo.subresourceRange.levelCount = 1;
+    dViewInfo.subresourceRange.layerCount = 1;
+    vkCreateImageView(device, &dViewInfo, NULL, &depthImageView);
     size_t vertSize, fragSize; char* vertCode = readShaderFile("render_vert.spv", &vertSize); char* fragCode = readShaderFile("render_frag.spv", &fragSize);
     VkShaderModuleCreateInfo vertInfo = {0}; vertInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO; vertInfo.codeSize = vertSize; vertInfo.pCode = (uint32_t*)vertCode;
     VkShaderModuleCreateInfo fragInfo = {0}; fragInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO; fragInfo.codeSize = fragSize; fragInfo.pCode = (uint32_t*)fragCode;
     VkShaderModule vertModule, fragModule; vkCreateShaderModule(device, &vertInfo, NULL, &vertModule); vkCreateShaderModule(device, &fragInfo, NULL, &fragModule); free(vertCode); free(fragCode);
 
+// ========================================================
+    // 1. SHADER STAGES
+    // ========================================================
     VkPipelineShaderStageCreateInfo shaderStages[2] = {{0}};
-    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; shaderStages[0].module = vertModule; shaderStages[0].pName = "main";
-    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; shaderStages[1].module = fragModule; shaderStages[1].pName = "main";
+    shaderStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; 
+    shaderStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT; 
+    shaderStages[0].module = vertModule; 
+    shaderStages[0].pName  = "main";
 
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo = {0}; vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly = {0}; inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO; inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-    VkPipelineViewportStateCreateInfo viewportState = {0}; viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO; viewportState.viewportCount = 1; viewportState.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo rasterizer = {0}; rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO; rasterizer.polygonMode = VK_POLYGON_MODE_FILL; rasterizer.lineWidth = 1.0f; rasterizer.cullMode = VK_CULL_MODE_NONE;
-    VkPipelineMultisampleStateCreateInfo multisampling = {0}; multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO; multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    shaderStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; 
+    shaderStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT; 
+    shaderStages[1].module = fragModule; 
+    shaderStages[1].pName  = "main";
+
+    // ========================================================
+    // 2. FIXED FUNCTION STATE (The "Dumb" Hardware Configuration)
+    // ========================================================
+    // Empty Vertex Input - Our SoA SSBOs handle this natively!
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo = {0}; 
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     
-    VkPipelineColorBlendAttachmentState colorBlendAttachment = {0}; colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT; colorBlendAttachment.blendEnable = VK_TRUE; colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA; colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD; colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE; colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO; colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
-    VkPipelineColorBlendStateCreateInfo colorBlending = {0}; colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO; colorBlending.attachmentCount = 1; colorBlending.pAttachments = &colorBlendAttachment;
-    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }; VkPipelineDynamicStateCreateInfo dynamicStateInfo = {0}; dynamicStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO; dynamicStateInfo.dynamicStateCount = 2; dynamicStateInfo.pDynamicStates = dynamicStates;
+    // Topology: Now set to Triangles!
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = {0}; 
+    inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO; 
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    // --- PUSH CONSTANTS RETURN (For Screen Res) ---
-    VkPushConstantRange gfxPushRange = {0}; gfxPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; gfxPushRange.offset = 0; gfxPushRange.size = sizeof(ScreenPushConstants);
-    VkPipelineLayoutCreateInfo gfxLayoutInfo = {0}; gfxLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO; gfxLayoutInfo.setLayoutCount = 1; gfxLayoutInfo.pSetLayouts = &descriptorSetLayout; gfxLayoutInfo.pushConstantRangeCount = 1; gfxLayoutInfo.pPushConstantRanges = &gfxPushRange;
-    VkPipelineLayout graphicsPipelineLayout; vkCreatePipelineLayout(device, &gfxLayoutInfo, NULL, &graphicsPipelineLayout);
+    VkPipelineViewportStateCreateInfo viewportState = {0}; 
+    viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO; 
+    viewportState.viewportCount = 1; 
+    viewportState.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer = {0}; 
+    rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO; 
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL; 
+    rasterizer.lineWidth   = 1.0f; 
+    rasterizer.cullMode    = VK_CULL_MODE_NONE; // Culling happens automatically if we want, but let's keep it off while debugging 3D
+
+    VkPipelineMultisampleStateCreateInfo multisampling = {0}; 
+    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO; 
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // --- NEW: DEPTH STENCIL STATE ---
+    // This tells the silicon to actively test and write to our new Z-Buffer
+    VkPipelineDepthStencilStateCreateInfo depthStencil = {0};
+    depthStencil.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable  = VK_TRUE;  // Check if new pixel is closer than old pixel
+    depthStencil.depthWriteEnable = VK_TRUE;  // If closer, write the new depth to the buffer
+    depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS; // "Less" means closer to the camera
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable     = VK_FALSE;
+
+    // ========================================================
+    // 3. COLOR BLENDING
+    // ========================================================
+    VkPipelineColorBlendAttachmentState colorBlendAttachment = {0}; 
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT; 
+    colorBlendAttachment.blendEnable         = VK_TRUE; 
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA; 
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; 
+    colorBlendAttachment.colorBlendOp        = VK_BLEND_OP_ADD; 
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE; 
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO; 
+    colorBlendAttachment.alphaBlendOp        = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending = {0}; 
+    colorBlending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO; 
+    colorBlending.attachmentCount = 1; 
+    colorBlending.pAttachments    = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }; 
+    VkPipelineDynamicStateCreateInfo dynamicStateInfo = {0}; 
+    dynamicStateInfo.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO; 
+    dynamicStateInfo.dynamicStateCount = 2; 
+    dynamicStateInfo.pDynamicStates    = dynamicStates;
+
+    // ========================================================
+    // 4. PIPELINE LAYOUT & PUSH CONSTANTS (The Bridge)
+    // ========================================================
+    // UPDATED: Now sized for our 64-byte Camera Matrix instead of just screen resolution
+    VkPushConstantRange gfxPushRange = {0}; 
+    gfxPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; 
+    gfxPushRange.offset     = 0; 
+    gfxPushRange.size       = sizeof(CameraPushConstants); // <--- CHANGED!
+
+    VkPipelineLayoutCreateInfo gfxLayoutInfo = {0}; 
+    gfxLayoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO; 
+    gfxLayoutInfo.setLayoutCount         = 1; 
+    gfxLayoutInfo.pSetLayouts            = &descriptorSetLayout; // Binds your 3 SSBOs
+    gfxLayoutInfo.pushConstantRangeCount = 1; 
+    gfxLayoutInfo.pPushConstantRanges    = &gfxPushRange;
+    
+    VkPipelineLayout graphicsPipelineLayout; 
+    vkCreatePipelineLayout(device, &gfxLayoutInfo, NULL, &graphicsPipelineLayout);
 
     VkPipelineRenderingCreateInfo renderingCreateInfo = {0}; renderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO; renderingCreateInfo.colorAttachmentCount = 1; renderingCreateInfo.pColorAttachmentFormats = &swapchainInfo.imageFormat;
     VkGraphicsPipelineCreateInfo gfxPipelineInfo = {0}; gfxPipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO; gfxPipelineInfo.pNext = &renderingCreateInfo; gfxPipelineInfo.stageCount = 2; gfxPipelineInfo.pStages = shaderStages; gfxPipelineInfo.pVertexInputState = &vertexInputInfo; gfxPipelineInfo.pInputAssemblyState = &inputAssembly; gfxPipelineInfo.pViewportState = &viewportState; gfxPipelineInfo.pRasterizationState = &rasterizer; gfxPipelineInfo.pMultisampleState = &multisampling; gfxPipelineInfo.pColorBlendState = &colorBlending; gfxPipelineInfo.pDynamicState = &dynamicStateInfo; gfxPipelineInfo.layout = graphicsPipelineLayout;
@@ -216,30 +341,127 @@ int main() {
         if (lua_isnumber(L, -1)) { draw_count = lua_tointeger(L, -1); }
         lua_pop(L, 1);
 
-        uint32_t imageIndex; vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
-        vkResetCommandBuffer(commandBuffer, 0); VkCommandBufferBeginInfo beginInfo = {0}; beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO; vkBeginCommandBuffer(commandBuffer, &beginInfo);
+        // ========================================================
+        // 1. FRAME ACQUISITION & COMMAND BUFFER SETUP
+        // ========================================================
+        // Ask the swapchain for the next available image to draw into
+        uint32_t imageIndex;
+        vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
 
-        VkImageMemoryBarrier imgBarrier = {0}; imgBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER; imgBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; imgBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; imgBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; imgBarrier.image = swapchainImages[imageIndex]; imgBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; imgBarrier.subresourceRange.levelCount = 1; imgBarrier.subresourceRange.layerCount = 1; imgBarrier.srcAccessMask = 0; imgBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1, &imgBarrier);
+        vkResetCommandBuffer(commandBuffer, 0);
 
-        VkRenderingAttachmentInfo colorAttachment = {0}; colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO; colorAttachment.imageView = swapchainImageViews[imageIndex]; colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAttachment.clearValue.color.float32[0] = 0.02f; colorAttachment.clearValue.color.float32[1] = 0.02f; colorAttachment.clearValue.color.float32[2] = 0.05f; colorAttachment.clearValue.color.float32[3] = 1.0f;
-        VkRenderingInfo renderInfo = {0}; renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO; renderInfo.renderArea.extent = swapchainExtent; renderInfo.layerCount = 1; renderInfo.colorAttachmentCount = 1; renderInfo.pColorAttachments = &colorAttachment;
+        VkCommandBufferBeginInfo beginInfo = {0};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        // ========================================================
+        // 2. IMAGE LAYOUT TRANSITION (The Pipeline Barrier)
+        // ========================================================
+        // GPUs expect images to be in specific memory layouts for specific tasks.
+        // Here, we transition the swapchain image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL.
+        VkImageMemoryBarrier imgBarrier = {0};
+        imgBarrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        imgBarrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+        imgBarrier.newLayout           = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        imgBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        imgBarrier.image               = swapchainImages[imageIndex];
+
+        imgBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        imgBarrier.subresourceRange.levelCount = 1;
+        imgBarrier.subresourceRange.layerCount = 1;
+
+        imgBarrier.srcAccessMask = 0;
+        imgBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        // Execute the barrier. The pipeline will stall at the output stage until the transition is done.
+        vkCmdPipelineBarrier(
+            commandBuffer,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, 0, NULL, 0, NULL, 1, &imgBarrier
+        );
+
+        // ========================================================
+        // 3. DYNAMIC RENDERING SETUP (Color + Depth)
+        // ========================================================
+        // Tell Vulkan WHERE to draw the colors, and what background color to clear with
+        VkRenderingAttachmentInfo colorAttachment = {0};
+        colorAttachment.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAttachment.imageView   = swapchainImageViews[imageIndex];
+        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachment.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;  // Clear screen at start of render
+        colorAttachment.storeOp     = VK_ATTACHMENT_STORE_OP_STORE; // Keep the pixels for presentation
+
+        // VibeEngine Dark Purple/Blue background
+        colorAttachment.clearValue.color.float32[0] = 0.02f; // R
+        colorAttachment.clearValue.color.float32[1] = 0.02f; // G
+        colorAttachment.clearValue.color.float32[2] = 0.05f; // B
+        colorAttachment.clearValue.color.float32[3] = 1.0f;  // A
+
+        // --- NEW: DEPTH ATTACHMENT ---
+        // Tell Vulkan WHERE to do Z-buffer testing
+        VkRenderingAttachmentInfo depthAttachment = {0};
+        depthAttachment.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView   = depthImageView; // Created during setup
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear the depth buffer to 1.0 (furthest)
+        depthAttachment.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE; // We don't read depth after rendering, so let the GPU discard it to save bandwidth!
+        depthAttachment.clearValue.depthStencil.depth = 1.0f;
+
+        // Bind the attachments to the Rendering Info
+        VkRenderingInfo renderInfo = {0};
+        renderInfo.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderInfo.renderArea.extent    = swapchainExtent;
+        renderInfo.layerCount           = 1;
+        renderInfo.colorAttachmentCount = 1;
+        renderInfo.pColorAttachments    = &colorAttachment;
+        renderInfo.pDepthAttachment     = &depthAttachment; // <-- Linked here!
 
         vkCmdBeginRendering(commandBuffer, &renderInfo);
 
-        VkViewport viewport = {0.0f, 0.0f, (float)swapchainExtent.width, (float)swapchainExtent.height, 0.0f, 1.0f}; vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-        VkRect2D scissor = {{0, 0}, swapchainExtent}; vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+        // ========================================================
+        // 4. VIEWPORT, SCISSOR & BINDINGS
+        // ========================================================
+        VkViewport viewport = {0};
+        viewport.x        = 0.0f;
+        viewport.y        = 0.0f;
+        viewport.width    = (float)swapchainExtent.width;
+        viewport.height   = (float)swapchainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
+        VkRect2D scissor = {0};
+        scissor.offset = (VkOffset2D){0, 0};
+        scissor.extent = swapchainExtent;
+        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+        // Bind the Pipeline (The shaders and hardware state)
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+        // Bind the Descriptor Sets (Your 3 SoA SSBOs for X, Y, Z)
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipelineLayout, 0, 1, &descriptorSet, 0, NULL);
 
-        // Push screen resolution so Shader can map Pixels -> NDC
-        ScreenPushConstants spc = { (float)swapchainExtent.width, (float)swapchainExtent.height };
-        vkCmdPushConstants(commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ScreenPushConstants), &spc);
+        // ========================================================
+        // 5. PUSH CONSTANTS & THE INSTANCED DRAW CALL
+        // ========================================================
+        // Push the 64-byte Camera Matrix to the Vertex Shader
+        // (Assuming you filled 'cam_pc' from Lua/C math right before this)
+        vkCmdPushConstants(
+            commandBuffer,
+            graphicsPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(CameraPushConstants),
+            &cam_pc
+        );
 
         if (draw_count > 0) {
-            vkCmdDraw(commandBuffer, draw_count, 1, 0, 0);
+            // PARAMETERS: (commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance)
+            // 12 vertices = 4 triangles (a complete tetrahedron)
+            // draw_count = number of instances (particles)
+            vkCmdDraw(commandBuffer, 12, draw_count, 0, 0);
         }
 
         vkCmdEndRendering(commandBuffer);
@@ -256,22 +478,55 @@ int main() {
         vkQueuePresentKHR(graphicsQueue, &presentInfo);
         vkQueueWaitIdle(graphicsQueue);
     }
-
     vkDeviceWaitIdle(device);
+
+    // 1. Sync Objects
     vkDestroySemaphore(device, imageAvailableSemaphore, NULL);
-    vkDestroyPipeline(device, graphicsPipeline, NULL); vkDestroyPipelineLayout(device, graphicsPipelineLayout, NULL);
-    vkDestroyShaderModule(device, vertModule, NULL); vkDestroyShaderModule(device, fragModule, NULL);
-    vkDestroyDescriptorPool(device, descriptorPool, NULL); vkDestroyDescriptorSetLayout(device, descriptorSetLayout, NULL);
+
+    // 2. Pipelines & Layouts
+    vkDestroyPipeline(device, graphicsPipeline, NULL);
+    vkDestroyPipelineLayout(device, graphicsPipelineLayout, NULL);
+
+    // 3. Shaders (Note: You can actually do this right after vkCreateGraphicsPipelines!)
+    vkDestroyShaderModule(device, vertModule, NULL);
+    vkDestroyShaderModule(device, fragModule, NULL);
+
+    // 4. Descriptors
+    vkDestroyDescriptorPool(device, descriptorPool, NULL);
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, NULL);
+
+    // 5. Command Pool (This automatically frees the command buffers inside it)
     vkDestroyCommandPool(device, commandPool, NULL);
-    for (uint32_t i = 0; i < imageCount; i++) { vkDestroyImageView(device, swapchainImageViews[i], NULL); }
-    free(swapchainImageViews); free(swapchainImages); vkDestroySwapchainKHR(device, swapchain, NULL);
-    
-    // FREE 3 VRAM BUFFERS
+
+    // ========================================================
+    // 6. DESTROY DEPTH BUFFER (Before Swapchain!)
+    // ========================================================
+    vkDestroyImageView(device, depthImageView, NULL);
+    vkDestroyImage(device, depthImage, NULL);
+    vkFreeMemory(device, depthMemory, NULL);
+
+    // 7. Swapchain & Views
+    for (uint32_t i = 0; i < imageCount; i++) {
+        vkDestroyImageView(device, swapchainImageViews[i], NULL);
+    }
+    free(swapchainImageViews);
+    free(swapchainImages);
+    vkDestroySwapchainKHR(device, swapchain, NULL);
+
+    // 8. FREE 3 VRAM BUFFERS (Your SoA Pipeline)
     vkUnmapMemory(device, memX); vkDestroyBuffer(device, bufX, NULL); vkFreeMemory(device, memX, NULL);
     vkUnmapMemory(device, memY); vkDestroyBuffer(device, bufY, NULL); vkFreeMemory(device, memY, NULL);
     vkUnmapMemory(device, memZ); vkDestroyBuffer(device, bufZ, NULL); vkFreeMemory(device, memZ, NULL);
-    
-    vkDestroyDevice(device, NULL); vkDestroySurfaceKHR(instance, surface, NULL); vkDestroyInstance(instance, NULL);
-    glfwDestroyWindow(g_window); glfwTerminate(); lua_close(L);
+
+    // 9. Core Vulkan Context
+    vkDestroyDevice(device, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
+    vkDestroyInstance(instance, NULL);
+
+    // 10. OS & Scripting
+    glfwDestroyWindow(g_window);
+    glfwTerminate();
+    lua_close(L);
+
     return 0;
 }

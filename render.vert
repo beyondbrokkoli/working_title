@@ -1,48 +1,59 @@
-#version 450
+#version 460
 
-// The 3 Flat Arrays coming directly from your AVX2 CPU Engine!
-layout(std430, binding = 0) readonly buffer BufX { float Vert_PX[]; };
-layout(std430, binding = 1) readonly buffer BufY { float Vert_PY[]; };
-layout(std430, binding = 2) readonly buffer BufZ { float Vert_PZ[]; };
+// ==========================================
+// 1. YOUR SOA PIPELINE (Direct VRAM Mapping)
+// ==========================================
+// Binding 0, 1, and 2 match your Descriptor Set setup in main.c
+layout(std430, binding = 0) readonly buffer PosX { float lx[]; };
+layout(std430, binding = 1) readonly buffer PosY { float ly[]; };
+layout(std430, binding = 2) readonly buffer PosZ { float lz[]; };
 
-layout(push_constant) uniform Screen {
-    float w;
-    float h;
-} screen;
+// ==========================================
+// 2. THE PUSH CONSTANT CONNECTION
+// ==========================================
+// This MUST match a struct in your C code exactly!
+// e.g., struct { mat4 viewProj; } PushConstants;
+layout(push_constant) uniform PushConstants {
+    mat4 viewProj;
+} pc;
 
-layout(location = 0) out vec4 fragColor;
+// ==========================================
+// 3. TETRAHEDRON GENERATOR (12 Vertices)
+// ==========================================
+const vec3 tet[4] = vec3[](
+    vec3( 0.0,  1.0,  0.0), // Top
+    vec3(-1.0, -0.5, -0.8), // Bottom Left
+    vec3( 1.0, -0.5, -0.8), // Bottom Right
+    vec3( 0.0, -0.5,  1.0)  // Front
+);
+
+const int indices[12] = int[](
+    0, 1, 2,  // Back face
+    0, 2, 3,  // Right face
+    0, 3, 1,  // Left face
+    1, 3, 2   // Bottom face
+);
+
+// Output to the Fragment Shader
+layout(location = 0) out vec3 v_WorldPos;
 
 void main() {
-    uint id = gl_VertexIndex;
+    // gl_InstanceIndex is the particle ID (0 to draw_count)
+    int pId = gl_InstanceIndex;
     
-    float px = Vert_PX[id];
-    float py = Vert_PY[id];
-    float pz = Vert_PZ[id]; // The raw, unclipped distance!
-    // [THE FIX] Ignore the CPU Graveyard!
-    if (pz < 0.1) {
-        // Yeet the vertex completely outside the bounds of the screen
-        gl_Position = vec4(2.0, 2.0, 2.0, 0.0); 
-        return;
-    }
-    // 1. Convert AVX2 Screen Coordinates (0 to 1920) to Vulkan NDC (-1.0 to 1.0)
-    float ndc_x = (px / (screen.w * 0.5)) - 1.0;
-    float ndc_y = (py / (screen.h * 0.5)) - 1.0;
-
-    // 2. [THE BUG FIX] Force Z into the safe [0, 1] range so Vulkan draws it!
-    gl_Position = vec4(ndc_x, ndc_y, 0.5, 1.0);
-
-    // 3. Dynamic Point Size: Particles get smaller as they get further away
-    gl_PointSize = clamp(20000.0 / max(pz, 1.0), 1.0, 6.0);
-
-    // 4. [THE BEAUTY] Use the raw depth to color the Swarm!
-    // Normalize the distance (assuming the swarm is roughly 5k to 15k units away)
-    float depth = clamp((pz - 5000.0) / 10000.0, 0.0, 1.0);
+    // Fetch the particle's center point directly from the AVX2 populated arrays
+    vec3 center = vec3(lx[pId], ly[pId], lz[pId]);
     
-    // Mix from Cyberpunk Pink (close) to Neon Cyan (far)
-    vec3 nearColor = vec3(1.0, 0.1, 0.6); 
-    vec3 farColor  = vec3(0.0, 0.8, 1.0); 
-    vec3 finalColor = mix(nearColor, farColor, depth);
-
-    // Additive blending looks best with a soft alpha
-    fragColor = vec4(finalColor, 0.6);
+    // gl_VertexIndex is the vertex of the current tetrahedron (0 to 11)
+    int localIdx = indices[gl_VertexIndex % 12];
+    vec3 localPos = tet[localIdx];
+    
+    // Scale the tetrahedron and place it at the particle's center
+    float particleScale = 0.5; // Adjust this to make your swarm bigger/smaller
+    vec3 worldPos = center + (localPos * particleScale);
+    
+    v_WorldPos = worldPos;
+    
+    // Project to the screen
+    gl_Position = pc.viewProj * vec4(worldPos, 1.0);
 }

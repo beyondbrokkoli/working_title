@@ -390,6 +390,55 @@ int main() {
     VkSemaphore imageAvailableSemaphore; 
     vkCreateSemaphore(device, &semaInfo, NULL, &imageAvailableSemaphore);
 
+    // ========================================================
+    // 10. ONE-TIME DEPTH BUFFER LAYOUT TRANSITION
+    // ========================================================
+    // We borrow the command buffer temporarily before the main loop starts
+    VkCommandBufferBeginInfo setupBeginInfo = {0};
+    setupBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    setupBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(commandBuffer, &setupBeginInfo);
+
+    // Define the transition from UNDEFINED to OPTIMAL
+    VkImageMemoryBarrier depthBarrier = {0};
+    depthBarrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    depthBarrier.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthBarrier.newLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    depthBarrier.image               = depthImage; 
+    
+    depthBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depthBarrier.subresourceRange.levelCount = 1;
+    depthBarrier.subresourceRange.layerCount = 1;
+    
+    depthBarrier.srcAccessMask = 0;
+    depthBarrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+
+    // Inject the barrier into the command buffer
+    vkCmdPipelineBarrier(
+        commandBuffer, 
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 
+        0, 0, NULL, 0, NULL, 1, &depthBarrier
+    );
+
+    // End recording
+    vkEndCommandBuffer(commandBuffer);
+
+    // Submit it to the GPU immediately
+    VkSubmitInfo setupSubmitInfo = {0};
+    setupSubmitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    setupSubmitInfo.commandBufferCount = 1;
+    setupSubmitInfo.pCommandBuffers    = &commandBuffer;
+    vkQueueSubmit(graphicsQueue, 1, &setupSubmitInfo, VK_NULL_HANDLE);
+    
+    // Force the CPU to wait here for a millisecond until the GPU confirms the memory is formatted
+    vkQueueWaitIdle(graphicsQueue);
+
+    // ========================================================
+    // 11. START THE ENGINE
+    // ========================================================
     lua_getglobal(L, "love_load");
     if (lua_isfunction(L, -1)) { if (lua_pcall(L, 0, 0, 0) != LUA_OK) { printf("[LUA ERROR] %s\n", lua_tostring(L, -1)); } } lua_pop(L, 1);
 

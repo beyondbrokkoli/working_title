@@ -8,8 +8,8 @@ Config = {
     fullscreen = true
 }
 
--- 1. Load the core modules
-local VibeMath = ffi.load("./libvibemath.so")
+-- 1. Load the core modules (Set-it-and-forget-it OS routing)
+local VibeMath = ffi.load(jit.os == "Windows" and "vibemath" or "./libvibemath.so")
 local Memory = require("memory")
 local Sequence = require("sequence")
 

@@ -172,7 +172,7 @@ EXPORT void vmath_set_resolution(int w, int h, uint32_t* screen_ptr, float* z_bu
 // ALL PHYSICS KERNELS (Bundled into a collapsed region for brevity)
 // ========================================================================
 
-void vmath_generate_torus(int count, float* lx, float* ly, float* lz, float time, float major_R, float minor_r) {
+EXPORT void vmath_generate_torus(int count, float* lx, float* ly, float* lz, float time, float major_R, float minor_r) {
     int segments = 64; // Rings around the center
     int sides = 16;    // Faces making up the tube
     

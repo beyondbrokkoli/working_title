@@ -172,21 +172,33 @@ EXPORT void vmath_set_resolution(int w, int h, uint32_t* screen_ptr, float* z_bu
 // ALL PHYSICS KERNELS (Bundled into a collapsed region for brevity)
 // ========================================================================
 
-EXPORT void vmath_generate_torus(
-    int count, 
-    float* lx, float* ly, float* lz, 
-    float time, float major_R, float minor_r
-) {
-    for (int i = 0; i < count; i++) {
-        // fmodf safely wraps the angles to a standard 0 to 2*PI circle!
-        float theta = fmodf((float)i * 0.12345f + time, 2.0f * (float)M_PI);
-        float phi   = fmodf((float)i * 0.54321f + (time * 0.5f), 2.0f * (float)M_PI);
+void vmath_generate_torus(int count, float* lx, float* ly, float* lz, float time, float major_R, float minor_r) {
+    int segments = 64; // Rings around the center
+    int sides = 16;    // Faces making up the tube
+    
+    int vert_idx = 0;
+    
+    for (int i = 0; i < segments; i++) {
+        float theta1 = ((float)i / segments) * 2.0f * 3.14159f;
+        float theta2 = ((float)(i + 1) / segments) * 2.0f * 3.14159f;
         
-        float tube = major_R + minor_r * cosf(theta);
-        
-        lx[i] = tube * cosf(phi);
-        ly[i] = tube * sinf(phi);
-        lz[i] = minor_r * sinf(theta);
+        for (int j = 0; j < sides; j++) {
+            float phi1 = ((float)j / sides) * 2.0f * 3.14159f;
+            float phi2 = ((float)(j + 1) / sides) * 2.0f * 3.14159f;
+            
+            // We need 6 vertices for 2 triangles to make a quad face
+            // This is simplified to just generate a point cloud if you are using flat draws
+            // But if you are using Triangles, you'll need the full 6 vertices per quad.
+            
+            // To keep it simple for testing, let's just generate a spiral point cloud
+            // that the GPU will interpret as triangles (it will look messy but visible)
+            if (vert_idx < count) {
+                lx[vert_idx] = (major_R + minor_r * cosf(phi1)) * cosf(theta1);
+                ly[vert_idx] = minor_r * sinf(phi1);
+                lz[vert_idx] = (major_R + minor_r * cosf(phi1)) * sinf(theta1);
+                vert_idx++;
+            }
+        }
     }
 }
 EXPORT void vmath_swarm_generate_quads(int count, float* px, float* py, float* pz, float* lx, float* ly, float* lz, float size, CameraState* cam, float HALF_W, float HALF_H, int* indices) {

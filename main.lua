@@ -101,6 +101,24 @@ function love_load()
 
     -- Ignite the Permanent Quad-Core Engine!
     VibeMath.vmath_init_thread_pool()
+    -- --- NEW: INJECT A SIMPLE TORUS ---
+    -- We'll generate 10,000 vertices as a test
+    local torus_verts = 10000 
+    
+    -- Call the C-level torus generator (assuming it's implemented in vibemath.c)
+    -- Parameters: count, X_array, Y_array, Z_array, time, major_R, minor_r
+    VibeMath.vmath_generate_torus(
+        torus_verts, 
+        Memory.Arrays.Vert_LX, 
+        Memory.Arrays.Vert_LY, 
+        Memory.Arrays.Vert_LZ, 
+        0.0, 
+        100.0, 
+        30.0
+    )
+    
+    -- Override the DrawCount so Vulkan knows how many vertices to draw
+    DrawCount = math.floor(torus_verts / 12) -- Since our C code does draw_count * 12
     -- Bind the raw FFI pointers to the C-Backend for the Zipping loop
     Engine.bindGeometry(
         tonumber(ffi.cast("uintptr_t", Memory.Arrays.Vert_LX)),
@@ -148,9 +166,9 @@ function love_update(dt)
     read_buffer, write_buffer = write_buffer, read_buffer
 
     -- 3. Execute AVX2 Physics
-    VibeMath.vmath_execute_queue(q_len, global_time, dt, read_buffer, write_buffer)
+    -- VibeMath.vmath_execute_queue(q_len, global_time, dt, read_buffer, write_buffer)
     Auditor.RunPreflight(Memory,DrawCount)
-    DrawCount = mem.Obj_VertCount[0]
+    -- DrawCount = mem.Obj_VertCount[0]
 end
 function love_mousemoved(x, y, dx, dy)
     Sequence.RunPhase("MouseMoved", x, y, dx, dy)

@@ -26,8 +26,8 @@ void build_camera_matrix(float width, float height, float cam_z, float* out_matr
     float fov = 1.0472f; // 60 degrees in radians
     float aspect = width / height;
     float zNear = 0.1f;
-    float zFar = 1000.0f;
-
+    // float zFar = 1000.0f;
+    float zFar = 100000.0f; // Let the lens see 100,000 units deep
     // 1. Perspective Matrix (Vulkan Y-down format)
     float f = 1.0f / tanf(fov * 0.5f);
     float proj[16] = {0};

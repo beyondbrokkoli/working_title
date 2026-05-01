@@ -1,18 +1,17 @@
 #version 450
-
-// Standard Vertex Input from our C AoS buffer
 layout(location = 0) in vec3 inPosition;
 
-// NEW: The Output to satisfy the Fragment Shader
-layout(location = 0) out vec3 fragColor; 
-
+// The bridge receiving our 16 floats from Lua
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
 } pc;
 
+layout(location = 0) out vec3 fragColor;
+
 void main() {
+    // Hardware projection!
     gl_Position = pc.viewProj * vec4(inPosition, 1.0);
     
-    // Pass a hot pink debug color to the fragment shader (to match your image!)
-    fragColor = vec3(1.0, 0.5, 1.0); 
+    // The pure Cyan glow you asked for
+    fragColor = vec3(0.0, 1.0, 1.0); 
 }

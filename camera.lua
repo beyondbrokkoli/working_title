@@ -16,12 +16,14 @@ return function(MainCamera)
     end
 
     function CameraModule.Init()
-        -- [THE CINEMATIC SPAWN]
-        -- Placed offset from the Sun vector to reveal perfect Lambertian shadows
-        MainCamera.x, MainCamera.y, MainCamera.z = -150, 50, 150
+        -- [THE GOD MODE SPAWN]
+        -- The Swarm lives at Y = 5000 and expands outward by 10,000+ units.
+        -- We spawn far back on the Z-axis, slightly elevated, looking straight at it.
+        MainCamera.x, MainCamera.y, MainCamera.z = 0, 7000, 25000
 
-        -- Point the lens roughly back at the origin where the donut spawns
-        MainCamera.yaw, MainCamera.pitch = 2.35, -0.3
+        -- Point the lens straight ahead, with a slight downward tilt
+        MainCamera.yaw = -math.pi / 2  -- (Adjust to +math.pi/2 if it looks backward!)
+        MainCamera.pitch = -0.1
 
         UpdateBasis()
     end
@@ -62,51 +64,52 @@ return function(MainCamera)
     -- VULKAN CAMERA MATRIX BUILDER
     -- ========================================================
     function CameraModule.GetViewProjectionMatrix(aspect)
-        local fov = 1.0472 -- 60 degrees
-        local zNear = 0.1
-        local zFar = 10000.0
-
-        -- 1. Build Perspective Matrix
-        local f = 1.0 / tan(fov * 0.5)
-        local p00 = f / aspect
-        local p11 = -f -- Inverted Y for Vulkan!
-        local p22 = zFar / (zNear - zFar)
-        local p23 = (zFar * zNear) / (zNear - zFar) -- Fixed sign error here
-
-        -- 2. Build View Matrix using existing Forward, Right, Up vectors
-        local rx, ry, rz = MainCamera.rtx, MainCamera.rty, MainCamera.rtz
-        local ux, uy, uz = MainCamera.upx, MainCamera.upy, MainCamera.upz
-        local fx, fy, fz = MainCamera.fwx, MainCamera.fwy, MainCamera.fwz
+        -- 1. Extract basis vectors (calculated from yaw/pitch)
         local cx, cy, cz = MainCamera.x, MainCamera.y, MainCamera.z
+        local fx, fy, fz = MainCamera.fwx, MainCamera.fwy, MainCamera.fwz
+        local ux, uy, uz = MainCamera.upx, MainCamera.upy, MainCamera.upz
+        local rx, ry, rz = MainCamera.rtx, MainCamera.rty, MainCamera.rtz
 
-        -- Translation (Dot products of vectors and position)
-        local tx = -(rx * cx + ry * cy + rz * cz)
-        local ty = -(ux * cx + uy * cy + uz * cz)
-        local tz =  (fx * cx + fy * cy + fz * cz)
+        -- 2. View Matrix (Translates and rotates the world around the camera)
+        -- Dot products to calculate camera translation offsets
+        local tx = -(rx*cx + ry*cy + rz*cz)
+        local ty = -(ux*cx + uy*cy + uz*cz)
+        local tz =  (fx*cx + fy*cy + fz*cz)
 
-        -- 3. Multiply Proj * View and return exactly 16 numbers
-        -- Column 0
-        local m0  = p00 * rx
-        local m1  = p11 * ux
-        local m2  = p22 * -fx
-        local m3  = fx
-        -- Column 1
-        local m4  = p00 * ry
-        local m5  = p11 * uy
-        local m6  = p22 * -fy
-        local m7  = fy
-        -- Column 2
-        local m8  = p00 * rz
-        local m9  = p11 * uz
-        local m10 = p22 * -fz
-        local m11 = fz
-        -- Column 3
-        local m12 = p00 * tx
-        local m13 = p11 * ty
-        local m14 = p22 * tz + p23 -- Fixed column addition here
-        local m15 = -tz
+        local view = {
+            rx, ux, -fx, 0,
+            ry, uy, -fy, 0,
+            rz, uz, -fz, 0,
+            tx, ty,  tz, 1
+        }
 
-        return m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15
+        -- 3. Projection Matrix (Vulkan Y-Down, Z 0 to 1)
+        local fov = math.rad(60)
+        local f = 1.0 / math.tan(fov * 0.5)
+        local zNear = 1.0
+        local zFar = 100000.0
+
+        local proj = {
+            f / aspect, 0,  0, 0,
+            0, -f, 0, 0, -- The negative 'f' perfectly flips the Y-axis for Vulkan!
+            0,  0, zFar / (zNear - zFar), -1,
+            0,  0, -(zFar * zNear) / (zFar - zNear), 0
+        }
+
+        -- 4. Matrix Multiplication: out = Proj * View
+        local out = {}
+        for r = 0, 3 do
+            for c = 0, 3 do
+                local sum = 0
+                for k = 0, 3 do
+                    sum = sum + view[r*4 + k + 1] * proj[k*4 + c + 1]
+                end
+                out[r*4 + c + 1] = sum
+            end
+        end
+
+        -- Unpack the 16 floats directly onto the Lua stack for main.c to grab!
+        return unpack(out)
     end
 
     return CameraModule

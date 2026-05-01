@@ -908,7 +908,6 @@ THREAD_FUNC vmath_physics_worker(void* arg) {
     }
     return THREAD_RETURN_VAL;
 }
-
 THREAD_FUNC worker_translate_aos(void* arg) {
     while (1) {
         // 1. Sleep until signaled
@@ -931,15 +930,40 @@ THREAD_FUNC worker_translate_aos(void* arg) {
         if (g_gpu_vertex_buffer && g_gpu_index_buffer && mem && mem->Obj_VertCount) {
             int vert_count = mem->Obj_VertCount[0];
             int particle_count = vert_count / 4; 
+            float size = 120.0f; // VibeEngine standard particle size
 
-            // Zip SoA Coordinates
-            for (int i = 0; i < vert_count; i++) {
-                g_gpu_vertex_buffer[i].x = mem->Swarm_PX[r][i];
-                g_gpu_vertex_buffer[i].y = mem->Swarm_PY[r][i];
-                g_gpu_vertex_buffer[i].z = mem->Swarm_PZ[r][i];
+            // Zipping AND EXPANDING SoA Centers into Vulkan AoS Tetrahedrons
+            // Notice we only loop up to particle_count to prevent the memory overrun!
+            for (int i = 0; i < particle_count; i++) {
+                // Read the single physics center point
+                float p_x = mem->Swarm_PX[r][i];
+                float p_y = mem->Swarm_PY[r][i];
+                float p_z = mem->Swarm_PZ[r][i];
+
+                int v = i * 4; // Base vertex offset for this particle in Vulkan
+
+                // Vertex 0: Top
+                g_gpu_vertex_buffer[v + 0].x = p_x;
+                g_gpu_vertex_buffer[v + 0].y = p_y + size;
+                g_gpu_vertex_buffer[v + 0].z = p_z;
+
+                // Vertex 1: Bottom Left Front
+                g_gpu_vertex_buffer[v + 1].x = p_x - size;
+                g_gpu_vertex_buffer[v + 1].y = p_y - size;
+                g_gpu_vertex_buffer[v + 1].z = p_z + size;
+
+                // Vertex 2: Bottom Right Front
+                g_gpu_vertex_buffer[v + 2].x = p_x + size;
+                g_gpu_vertex_buffer[v + 2].y = p_y - size;
+                g_gpu_vertex_buffer[v + 2].z = p_z + size;
+
+                // Vertex 3: Bottom Back
+                g_gpu_vertex_buffer[v + 3].x = p_x;
+                g_gpu_vertex_buffer[v + 3].y = p_y - size;
+                g_gpu_vertex_buffer[v + 3].z = p_z - size;
             }
 
-            // Flatten SoA Tetrahedrons
+            // Flatten SoA Tetrahedrons (Unchanged, this was already correct)
             for (int i = 0; i < particle_count; i++) {
                 int p_id = mem->Swarm_Indices[r][i];
                 int v = p_id * 4; 

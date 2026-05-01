@@ -141,10 +141,10 @@ function love_update(dt)
 
     -- 3. Execute AVX2 Physics
     VibeMath.vmath_execute_queue(q_len, global_time, dt, read_buffer, write_buffer)
-    
+
     -- Optional: Leave the auditor on if you want to verify memory health
-    Auditor.RunPreflight(Memory, DrawCount)
-    
+    -- Auditor.RunPreflight(Memory, DrawCount)
+
     DrawCount = mem.Obj_VertCount[0]
 end
 

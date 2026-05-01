@@ -11,7 +11,7 @@ local Memory = {
 -- [1] THE UNIVERSE BOUNDARIES (Static Limits)
 -- ==========================================
 MAX_OBJS = 1000000
-MAX_VERTS = 4000000
+MAX_VERTS = 9600000
 MAX_TRIS = 4000000
 
 MAX_BOUND_SPHERES = 512

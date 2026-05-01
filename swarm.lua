@@ -3,7 +3,7 @@ local Memory = require("memory")
 
 return function()
     local Swarm = {}
-    local PCOUNT = 10007
+    local PCOUNT = 1000000
     local target_state = 0
     local gravity_blend = 1.0
     local metal_blend = 0.0    -- Restored!

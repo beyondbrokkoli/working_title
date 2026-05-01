@@ -80,17 +80,10 @@ function love_load()
     Engine.setRelativeMode(true)
     MainCamera.fov = (CANVAS_W / 800) * 600
 
-    print("[LUA] Hijacking CPU RAM with RTX 3050 Pointers...")
-    Memory.Arrays.Vert_PX = ffi.cast("float*", Engine.getVRAM_X())
-    Memory.Arrays.Vert_PY = ffi.cast("float*", Engine.getVRAM_Y())
-    Memory.Arrays.Vert_PZ = ffi.cast("float*", Engine.getVRAM_Z())
-
-    Memory.RenderStruct.Vert_PX = Memory.Arrays.Vert_PX
-    Memory.RenderStruct.Vert_PY = Memory.Arrays.Vert_PY
-    Memory.RenderStruct.Vert_PZ = Memory.Arrays.Vert_PZ
-
-    -- THE SWARM RETURNS
-    VibeMath.vmath_bind_engine(Memory.RenderStruct, MainCamera, Memory.Arrays.CommandQueue)
+    -- THE SWARM RETURNS (Now with VRAM pointers!)
+    local vbo_ptr = Engine.get_gpu_vbo()
+    local ibo_ptr = Engine.get_gpu_ibo()
+    VibeMath.vmath_bind_engine(Memory.RenderStruct, MainCamera, Memory.Arrays.CommandQueue, vbo_ptr, ibo_ptr)
 
     Sequence.LoadModule("camera", MainCamera)
     Sequence.LoadModule("swarm")
@@ -101,30 +94,6 @@ function love_load()
 
     -- Ignite the Permanent Quad-Core Engine!
     VibeMath.vmath_init_thread_pool()
-    -- --- NEW: INJECT A SIMPLE TORUS ---
-    -- We'll generate 10,000 vertices as a test
-    local torus_verts = 10000 
-    
-    -- Call the C-level torus generator (assuming it's implemented in vibemath.c)
-    -- Parameters: count, X_array, Y_array, Z_array, time, major_R, minor_r
-    VibeMath.vmath_generate_torus(
-        torus_verts, 
-        Memory.Arrays.Vert_LX, 
-        Memory.Arrays.Vert_LY, 
-        Memory.Arrays.Vert_LZ, 
-        0.0, 
-        100.0, 
-        30.0
-    )
-    
-    -- Override the DrawCount so Vulkan knows how many vertices to draw
-    DrawCount = math.floor(torus_verts / 12) -- Since our C code does draw_count * 12
-    -- Bind the raw FFI pointers to the C-Backend for the Zipping loop
-    Engine.bindGeometry(
-        tonumber(ffi.cast("uintptr_t", Memory.Arrays.Vert_LX)),
-        tonumber(ffi.cast("uintptr_t", Memory.Arrays.Vert_LY)),
-        tonumber(ffi.cast("uintptr_t", Memory.Arrays.Vert_LZ))
-    )
 
     print("[INIT] Bound SoA Geometry to Vulkan Backend.")
 end
@@ -147,10 +116,10 @@ function love_update(dt)
 
     q[q_len] = CMD.CLEAR; q_len = q_len + 1
     q[q_len] = CMD.SWARM_APPLY_BASE_PHYSICS; q_len = q_len + 1
-    
+
     if love.mouse.isDown(1) then q[q_len] = CMD.SWARM_EXPLOSION_PUSH; q_len = q_len + 1 end
     if love.mouse.isDown(2) then q[q_len] = CMD.SWARM_EXPLOSION_PULL; q_len = q_len + 1 end
-    
+
     local state = mem.Swarm_State
     if state == 1 then q[q_len] = CMD.SWARM_BUNDLE; q_len = q_len + 1
     elseif state == 2 then q[q_len] = CMD.SWARM_GALAXY; q_len = q_len + 1
@@ -166,10 +135,14 @@ function love_update(dt)
     read_buffer, write_buffer = write_buffer, read_buffer
 
     -- 3. Execute AVX2 Physics
-    -- VibeMath.vmath_execute_queue(q_len, global_time, dt, read_buffer, write_buffer)
-    Auditor.RunPreflight(Memory,DrawCount)
-    -- DrawCount = mem.Obj_VertCount[0]
+    VibeMath.vmath_execute_queue(q_len, global_time, dt, read_buffer, write_buffer)
+    
+    -- Optional: Leave the auditor on if you want to verify memory health
+    Auditor.RunPreflight(Memory, DrawCount)
+    
+    DrawCount = mem.Obj_VertCount[0]
 end
+
 function love_mousemoved(x, y, dx, dy)
     Sequence.RunPhase("MouseMoved", x, y, dx, dy)
 end

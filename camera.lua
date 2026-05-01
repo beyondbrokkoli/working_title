@@ -91,7 +91,7 @@ return function(MainCamera)
 
         local proj = {
             f / aspect, 0,  0, 0,
-            0, -f, 0, 0, -- The negative 'f' perfectly flips the Y-axis for Vulkan!
+            0, f, 0, 0, -- NOT FLIPPING
             0,  0, zFar / (zNear - zFar), -1,
             0,  0, -(zFar * zNear) / (zFar - zNear), 0
         }

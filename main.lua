@@ -83,7 +83,12 @@ function love_load()
     -- THE SWARM RETURNS (Now with VRAM pointers!)
     local vbo_ptr = Engine.get_gpu_vbo()
     local ibo_ptr = Engine.get_gpu_ibo()
-    VibeMath.vmath_bind_engine(Memory.RenderStruct, MainCamera, Memory.Arrays.CommandQueue, vbo_ptr, ibo_ptr)
+
+    -- 1. Hook up the math/physics inputs (3 arguments)
+    VibeMath.vmath_bind_engine(Memory.RenderStruct, MainCamera, Memory.Arrays.CommandQueue)
+
+    -- 2. Hook up the Vulkan video outputs (2 arguments)
+    VibeMath.vmath_bind_vulkan_buffers(vbo_ptr, ibo_ptr)
 
     Sequence.LoadModule("camera", MainCamera)
     Sequence.LoadModule("swarm")

@@ -154,8 +154,15 @@ typedef struct {
     float x, y, z;
 } VertexAoS;
 
+// Keep them static. They belong to vibemath's internal state.
 static VertexAoS* g_gpu_vertex_buffer = NULL;
 static uint32_t* g_gpu_index_buffer = NULL;
+
+// ADD THIS NEW HANDSHAKE FUNCTION
+EXPORT void vmath_bind_vulkan_buffers(VertexAoS* v_buf, uint32_t* i_buf) {
+    g_gpu_vertex_buffer = v_buf;
+    g_gpu_index_buffer = i_buf;
+}
 
 // --- Render Thread Sync Primitives ---
 vmath_mutex_t g_render_mutex;

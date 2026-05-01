@@ -962,11 +962,10 @@ THREAD_FUNC worker_translate_aos(void* arg) {
                 g_gpu_vertex_buffer[v + 3].y = p_y - size;
                 g_gpu_vertex_buffer[v + 3].z = p_z - size;
             }
-
-            // Flatten SoA Tetrahedrons (Unchanged, this was already correct)
+            // Flatten SoA Tetrahedrons sequentially!
             for (int i = 0; i < particle_count; i++) {
-                int p_id = mem->Swarm_Indices[r][i];
-                int v = p_id * 4; 
+                // Ignore mem->Swarm_Indices. Just use 'i' directly!
+                int v = i * 4; 
                 int idx = i * 12; 
 
                 // Front, Right, Left, Bottom

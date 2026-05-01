@@ -157,7 +157,7 @@ int main() {
 
     VkApplicationInfo appInfo = {0}; appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO; appInfo.apiVersion = VK_API_VERSION_1_3;
     uint32_t glfwExtCount = 0; const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
-    VkInstanceCreateInfo createInfo = {0}; createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO; createInfo.pApplicationInfo = &appInfo; createInfo.enabledExtensionCount = glfwExtCount; createInfo.ppEnabledExtensionNames = glfwExts; createInfo.enabledLayerCount = 1; createInfo.ppEnabledLayerNames = validationLayers;
+    VkInstanceCreateInfo createInfo = {0}; createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO; createInfo.pApplicationInfo = &appInfo; createInfo.enabledExtensionCount = glfwExtCount; createInfo.ppEnabledExtensionNames = glfwExts; createInfo.enabledLayerCount = 0; createInfo.ppEnabledLayerNames = validationLayers;
     VkInstance instance; vkCreateInstance(&createInfo, NULL, &instance);
 
     uint32_t deviceCount = 0; vkEnumeratePhysicalDevices(instance, &deviceCount, NULL);

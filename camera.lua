@@ -24,10 +24,11 @@ return function(MainCamera)
         -- We spawn far back on the Z-axis, slightly elevated, looking straight at it.
         MainCamera.x, MainCamera.y, MainCamera.z = 0, 7000, 25000
 
-        -- Point the lens straight ahead, with a slight downward tilt
-        MainCamera.yaw = -math.pi / 2  -- (Adjust to +math.pi/2 if it looks backward!)
-        MainCamera.pitch = -0.1
-
+        -- "Das andere links" adjustment!
+        -- math.pi / 4 gives you a 45-degree turn. 
+        -- math.pi / 8 gives you a subtler 22.5-degree turn.
+        -- If this turns it the wrong way, just change the + to a -
+        MainCamera.yaw = (-math.pi / 2) - (math.pi / 4)
         UpdateBasis()
     end
 
@@ -36,7 +37,7 @@ return function(MainCamera)
     end
 
     function CameraModule.Tick(dt)
-        local s = 200.0 * dt -- Slowed down slightly for donut viewing!
+        local s = 4000.0 * dt -- Slowed down slightly for donut viewing!
         
         if love.keyboard.isDown("w") then MainCamera.x, MainCamera.y, MainCamera.z = MainCamera.x + MainCamera.fwx * s, MainCamera.y + MainCamera.fwy * s, MainCamera.z + MainCamera.fwz * s end
         if love.keyboard.isDown("s") then MainCamera.x, MainCamera.y, MainCamera.z = MainCamera.x - MainCamera.fwx * s, MainCamera.y - MainCamera.fwy * s, MainCamera.z - MainCamera.fwz * s end

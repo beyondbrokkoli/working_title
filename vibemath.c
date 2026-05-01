@@ -149,6 +149,29 @@ typedef struct {
 PhysicsThreadPayload g_physics_payload;
 vmath_thread_t g_physics_thread;
 
+// --- Vulkan AoS Structs & Pointers ---
+typedef struct {
+    float x, y, z;
+} VertexAoS;
+
+static VertexAoS* g_gpu_vertex_buffer = NULL;
+static uint32_t* g_gpu_index_buffer = NULL;
+
+// --- Render Thread Sync Primitives ---
+vmath_mutex_t g_render_mutex;
+vmath_cond_t g_render_cv_start;
+vmath_cond_t g_render_cv_done;
+int g_render_sig = 0;
+int g_render_done = 1;
+vmath_thread_t g_render_thread;
+
+typedef struct {
+    RenderMemory* mem;
+    int read_idx;
+} RenderThreadPayload;
+
+RenderThreadPayload g_render_payload;
+
 // GLOBALS
 int       g_canvas_w;
 int       g_canvas_h;
@@ -158,8 +181,10 @@ RenderMemory* g_mem ;
 CameraState* g_cam;
 int* g_queue;
 
-EXPORT void vmath_bind_engine(RenderMemory* mem, CameraState* cam, int* queue) {
+EXPORT void vmath_bind_engine(RenderMemory* mem, CameraState* cam, int* queue, VertexAoS* v_buf, uint32_t* i_buf) {
     g_mem = mem; g_cam = cam; g_queue = queue;
+    g_gpu_vertex_buffer = v_buf;
+    g_gpu_index_buffer = i_buf;
 }
 
 // Notice how we removed the screen pointers! AVX2 no longer cares about rasterizing.
@@ -877,55 +902,134 @@ THREAD_FUNC vmath_physics_worker(void* arg) {
     return THREAD_RETURN_VAL;
 }
 
-// ========================================================
-// THE DUMB DISPATCHER (No raster dispatching!)
-// ========================================================
-EXPORT void vmath_execute_queue(int command_count, float time, float dt, int read_idx, int write_idx) {
-    g_physics_payload.command_count = command_count;
-    g_physics_payload.queue = g_queue; g_physics_payload.mem = g_mem; g_physics_payload.time = time; g_physics_payload.dt = dt;
-    g_physics_payload.read_idx = read_idx; g_physics_payload.write_idx = write_idx;
+THREAD_FUNC worker_translate_aos(void* arg) {
+    while (1) {
+        // 1. Sleep until signaled
+        vmath_mutex_lock(&g_render_mutex);
+        while (g_render_sig == 0) {
+            vmath_cond_wait(&g_render_cv_start, &g_render_mutex);
+        }
+        
+        // 2. Check for shutdown signal
+        if (g_render_sig == 2) {
+            vmath_mutex_unlock(&g_render_mutex);
+            break;
+        }
+        vmath_mutex_unlock(&g_render_mutex);
 
+        // 3. Execute the Translation Payload
+        RenderMemory* mem = g_render_payload.mem;
+        int r = g_render_payload.read_idx;
+
+        if (g_gpu_vertex_buffer && g_gpu_index_buffer && mem && mem->Obj_VertCount) {
+            int vert_count = mem->Obj_VertCount[0];
+            int particle_count = vert_count / 4; 
+
+            // Zip SoA Coordinates
+            for (int i = 0; i < vert_count; i++) {
+                g_gpu_vertex_buffer[i].x = mem->Swarm_PX[r][i];
+                g_gpu_vertex_buffer[i].y = mem->Swarm_PY[r][i];
+                g_gpu_vertex_buffer[i].z = mem->Swarm_PZ[r][i];
+            }
+
+            // Flatten SoA Tetrahedrons
+            for (int i = 0; i < particle_count; i++) {
+                int p_id = mem->Swarm_Indices[r][i];
+                int v = p_id * 4; 
+                int idx = i * 12; 
+
+                // Front, Right, Left, Bottom
+                g_gpu_index_buffer[idx + 0] = v + 0; g_gpu_index_buffer[idx + 1] = v + 1; g_gpu_index_buffer[idx + 2] = v + 2;
+                g_gpu_index_buffer[idx + 3] = v + 0; g_gpu_index_buffer[idx + 4] = v + 2; g_gpu_index_buffer[idx + 5] = v + 3;
+                g_gpu_index_buffer[idx + 6] = v + 0; g_gpu_index_buffer[idx + 7] = v + 3; g_gpu_index_buffer[idx + 8] = v + 1;
+                g_gpu_index_buffer[idx + 9] = v + 1; g_gpu_index_buffer[idx + 10] = v + 3; g_gpu_index_buffer[idx + 11] = v + 2;
+            }
+        }
+
+        // 4. Signal completion and go back to sleep
+        vmath_mutex_lock(&g_render_mutex);
+        g_render_sig = 0;
+        g_render_done = 1;
+        vmath_cond_broadcast(&g_render_cv_done);
+        vmath_mutex_unlock(&g_render_mutex);
+    }
+    return THREAD_RETURN_VAL;
+}
+EXPORT void vmath_execute_queue(int command_count, float time, float dt, int read_idx, int write_idx) {
+    // 1. Setup Payloads
+    g_physics_payload.command_count = command_count;
+    g_physics_payload.queue = g_queue;
+    g_physics_payload.mem = g_mem;
+    g_physics_payload.time = time;
+    g_physics_payload.dt = dt;
+    g_physics_payload.read_idx = read_idx;
+    g_physics_payload.write_idx = write_idx;
+
+    g_render_payload.mem = g_mem;
+    g_render_payload.read_idx = read_idx;
+
+    // 2. Wake the Physics Thread (Math)
     vmath_mutex_lock(&g_phys_mutex);
-    g_phys_done = 0; g_phys_sig = 1;
+    g_phys_done = 0;
+    g_phys_sig = 1;
     vmath_cond_broadcast(&g_phys_cv_start);
     vmath_mutex_unlock(&g_phys_mutex);
 
-    for (int i = 0; i < command_count; i++) {
-        int opcode = g_queue[i];
-        int swarm_count = g_mem->Obj_VertCount[0] / 4;
+    // 3. Wake the Render Thread (Memory Translator)
+    vmath_mutex_lock(&g_render_mutex);
+    g_render_done = 0;
+    g_render_sig = 1;
+    vmath_cond_broadcast(&g_render_cv_start);
+    vmath_mutex_unlock(&g_render_mutex);
 
-        if (opcode == 9) { // SWARM_GEN_QUADS
-            vmath_swarm_generate_quads(swarm_count, g_mem->Swarm_PX[read_idx], g_mem->Swarm_PY[read_idx], g_mem->Swarm_PZ[read_idx], g_mem->Vert_LX + g_mem->Obj_VertStart[0], g_mem->Vert_LY + g_mem->Obj_VertStart[0], g_mem->Vert_LZ + g_mem->Obj_VertStart[0], 120.0f, g_cam, g_half_w, g_half_h, g_mem->Swarm_Indices[read_idx]);
-        } 
-        else if (opcode == 11) { // RENDER_CULL
-            int id = g_queue[++i];
-            float cpx = g_cam->x, cpy = g_cam->y, cpz = g_cam->z;
-            float cfw_x = g_cam->fwx, cfw_y = g_cam->fwy, cfw_z = g_cam->fwz;
-            float crt_x = g_cam->rtx, crt_z = g_cam->rtz;
-            float cup_x = g_cam->upx, cup_y = g_cam->upy, cup_z = g_cam->upz;
-            float cam_fov = g_cam->fov;
-            float ox = g_mem->Obj_X[id], oy = g_mem->Obj_Y[id], oz = g_mem->Obj_Z[id];
-            float rx = g_mem->Obj_RTX[id], ry = g_mem->Obj_RTY[id], rz = g_mem->Obj_RTZ[id];
-            float ux = g_mem->Obj_UPX[id], uy = g_mem->Obj_UPY[id], uz = g_mem->Obj_UPZ[id];
-            float fx = g_mem->Obj_FWX[id], fy = g_mem->Obj_FWY[id], fz = g_mem->Obj_FWZ[id];
-            int vStart = g_mem->Obj_VertStart[id], vCount = g_mem->Obj_VertCount[id];
-
-            // REMOVED OLD CALLS
-        }
-    }
-
+    // 4. Barrier Wait: Physics Complete
     vmath_mutex_lock(&g_phys_mutex);
-    while (g_phys_done == 0) { vmath_cond_wait(&g_phys_cv_done, &g_phys_mutex); }
+    while (g_phys_done == 0) {
+        vmath_cond_wait(&g_phys_cv_done, &g_phys_mutex);
+    }
     vmath_mutex_unlock(&g_phys_mutex);
-}
 
+    // 5. Barrier Wait: Render Translator Complete
+    vmath_mutex_lock(&g_render_mutex);
+    while (g_render_done == 0) {
+        vmath_cond_wait(&g_render_cv_done, &g_render_mutex);
+    }
+    vmath_mutex_unlock(&g_render_mutex);
+}
 EXPORT void vmath_init_thread_pool() {
-    vmath_mutex_init(&g_phys_mutex); vmath_cond_init(&g_phys_cv_start); vmath_cond_init(&g_phys_cv_done);
+    // Init Physics Thread
+    vmath_mutex_init(&g_phys_mutex);
+    vmath_cond_init(&g_phys_cv_start);
+    vmath_cond_init(&g_phys_cv_done);
     g_physics_thread = vmath_thread_start(vmath_physics_worker, NULL);
+
+    // Init Render Thread
+    vmath_mutex_init(&g_render_mutex);
+    vmath_cond_init(&g_render_cv_start);
+    vmath_cond_init(&g_render_cv_done);
+    g_render_thread = vmath_thread_start(worker_translate_aos, NULL);
 }
 
 EXPORT void vmath_shutdown_thread_pool() {
-    vmath_mutex_lock(&g_phys_mutex); g_phys_sig = 2; vmath_cond_broadcast(&g_phys_cv_start); vmath_mutex_unlock(&g_phys_mutex);
+    // Kill Physics Thread
+    vmath_mutex_lock(&g_phys_mutex);
+    g_phys_sig = 2;
+    vmath_cond_broadcast(&g_phys_cv_start);
+    vmath_mutex_unlock(&g_phys_mutex);
     vmath_thread_join(g_physics_thread);
-    vmath_mutex_destroy(&g_phys_mutex); vmath_cond_destroy(&g_phys_cv_start); vmath_cond_destroy(&g_phys_cv_done);
+    
+    vmath_mutex_destroy(&g_phys_mutex);
+    vmath_cond_destroy(&g_phys_cv_start);
+    vmath_cond_destroy(&g_phys_cv_done);
+
+    // Kill Render Thread
+    vmath_mutex_lock(&g_render_mutex);
+    g_render_sig = 2;
+    vmath_cond_broadcast(&g_render_cv_start);
+    vmath_mutex_unlock(&g_render_mutex);
+    vmath_thread_join(g_render_thread);
+    
+    vmath_mutex_destroy(&g_render_mutex);
+    vmath_cond_destroy(&g_render_cv_start);
+    vmath_cond_destroy(&g_render_cv_done);
 }

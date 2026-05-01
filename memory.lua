@@ -179,7 +179,7 @@ ffi.cdef[[
     } RenderMemory;
 
     // ENGINE BINDING (Call Once on Startup)
-    void vmath_bind_engine(RenderMemory* mem, CameraState* cam, int* queue);
+    void vmath_bind_engine(RenderMemory* mem, CameraState* cam, int* queue, void* v_buf, void* i_buf);
 
     // RESOLUTION BINDING (Call on Startup & Resize)
     void vmath_set_resolution(int w, int h, uint32_t* screen_ptr, float* z_buffer);

@@ -49,7 +49,7 @@ void build_camera_matrix(float width, float height, float cam_z, float* out_matr
     for (int i = 0; i < 16; i++) out_matrix[i] = 0.0f;
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
-            out_matrix[c * 4 + r] = 
+            out_matrix[c * 4 + r] =
                 proj[0 * 4 + r] * view[c * 4 + 0] +
                 proj[1 * 4 + r] * view[c * 4 + 1] +
                 proj[2 * 4 + r] * view[c * 4 + 2] +
@@ -57,18 +57,12 @@ void build_camera_matrix(float width, float height, float cam_z, float* out_matr
         }
     }
 }
-// The AoS structure Vulkan will consume
-typedef struct {
-    float x, y, z;
-} VertexAoS;
+typedef struct { float x, y, z; } VertexAoS; // Keep the struct definition
+VertexAoS* g_gpu_vertex_buffer;       // We pass these to vibemath.c
+uint32_t* g_gpu_index_buffer;         // Same here
 
-// The 3 SoA pointers for Lua (CPU side)
-float *g_ptrX = NULL, *g_ptrY = NULL, *g_ptrZ = NULL;
-
-// The single AoS pointer for Vulkan (Mapped GPU side)
-VertexAoS* g_mappedAoS = NULL;
 GLFWwindow* g_window = NULL;
-lua_State* g_L = NULL; 
+lua_State* g_L = NULL;
 double g_last_mouse_x = 0.0, g_last_mouse_y = 0.0;
 int g_first_mouse = 1;
 
@@ -83,13 +77,7 @@ static int l_setCameraMatrix(lua_State* L) {
     }
     return 0;
 }
-static int l_bindGeometry(lua_State* L) {
-    // We pass the pointers as raw numbers from Lua to bypass any FFI strictness
-    g_ptrX = (float*)(uintptr_t)lua_tonumber(L, 1);
-    g_ptrY = (float*)(uintptr_t)lua_tonumber(L, 2);
-    g_ptrZ = (float*)(uintptr_t)lua_tonumber(L, 3);
-    return 0;
-}
+
 static int l_isKeyDown(lua_State* L) { int key = luaL_checkinteger(L, 1); lua_pushboolean(L, glfwGetKey(g_window, key) == GLFW_PRESS); return 1; }
 static int l_setRelativeMode(lua_State* L) { glfwSetInputMode(g_window, GLFW_CURSOR, lua_toboolean(L, 1) ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL); return 0; }
 // Mimics love.mouse.isDown(button)
@@ -104,10 +92,8 @@ static int l_isMouseDown(lua_State* L) {
     lua_pushboolean(L, state == GLFW_PRESS);
     return 1;
 }
-// EXPORT THE 3 BUFFERS TO LUA
-static int l_getVRAM_X(lua_State* L) { lua_pushlightuserdata(L, g_ptrX); return 1; }
-static int l_getVRAM_Y(lua_State* L) { lua_pushlightuserdata(L, g_ptrY); return 1; }
-static int l_getVRAM_Z(lua_State* L) { lua_pushlightuserdata(L, g_ptrZ); return 1; }
+static int l_get_gpu_vbo(lua_State* L) { lua_pushlightuserdata(L, g_gpu_vertex_buffer); return 1; }
+static int l_get_gpu_ibo(lua_State* L) { lua_pushlightuserdata(L, g_gpu_index_buffer); return 1; }
 
 void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     if (g_first_mouse) { g_last_mouse_x = xpos; g_last_mouse_y = ypos; g_first_mouse = 0; }
@@ -152,12 +138,11 @@ int main() {
     lua_newtable(L);
     lua_pushcfunction(L, l_isKeyDown); lua_setfield(L, -2, "isKeyDown");
     lua_pushcfunction(L, l_setRelativeMode); lua_setfield(L, -2, "setRelativeMode");
-    lua_pushcfunction(L, l_getVRAM_X); lua_setfield(L, -2, "getVRAM_X");
-    lua_pushcfunction(L, l_getVRAM_Y); lua_setfield(L, -2, "getVRAM_Y");
-    lua_pushcfunction(L, l_getVRAM_Z); lua_setfield(L, -2, "getVRAM_Z");
     lua_pushcfunction(L, l_isMouseDown); lua_setfield(L, -2, "isMouseDown");
     lua_pushcfunction(L, l_setCameraMatrix); lua_setfield(L, -2, "setCameraMatrix");
-    lua_pushcfunction(L, l_bindGeometry); lua_setfield(L, -2, "bindGeometry");
+    // ADD THESE TWO:
+    lua_pushcfunction(L, l_get_gpu_vbo); lua_setfield(L, -2, "get_gpu_vbo");
+    lua_pushcfunction(L, l_get_gpu_ibo); lua_setfield(L, -2, "get_gpu_ibo");
     lua_setglobal(L, "Engine");
 
     if (luaL_dofile(L, "main.lua") != LUA_OK) { printf("FATAL: %s\n", lua_tostring(L, -1)); return -1; }
@@ -190,36 +175,53 @@ int main() {
     VkDevice device; vkCreateDevice(chosenGPU, &deviceCreateInfo, NULL, &device);
     VkQueue graphicsQueue; vkGetDeviceQueue(device, qIndex, 0, &graphicsQueue);
 
-uint32_t maxVerts = 4000000; 
+    uint32_t maxVerts = 4000000;
+    uint32_t maxIndices = 12000000; // 1 million particles * 12 indices each
 
-    // 1. Allocate fast CPU memory for Lua to write to (SoA)
-    g_ptrX = malloc(maxVerts * sizeof(float));
-    g_ptrY = malloc(maxVerts * sizeof(float));
-    g_ptrZ = malloc(maxVerts * sizeof(float));
-
-    // 2. Allocate ONE Host-Visible Vulkan buffer for the GPU (AoS)
+    // 1. Allocate Host-Visible Vulkan Vertex Buffer (AoS)
     VkDeviceSize aosSize = maxVerts * sizeof(VertexAoS);
     VkBuffer bufAoS;
     VkDeviceMemory memAoS;
-    
-    VkBufferCreateInfo vboInfo = {0}; 
-    vboInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; 
-    vboInfo.size = aosSize; 
-    // IMPORTANT: Note the VERTEX_BUFFER bit!
-    vboInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; 
+
+    VkBufferCreateInfo vboInfo = {0};
+    vboInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vboInfo.size = aosSize;
+    vboInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     vkCreateBuffer(device, &vboInfo, NULL, &bufAoS);
-    
-    VkMemoryRequirements reqs; 
-    vkGetBufferMemoryRequirements(device, bufAoS, &reqs);
-    
-    VkMemoryAllocateInfo alloc = {0}; 
-    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; 
-    alloc.allocationSize = reqs.size; 
-    alloc.memoryTypeIndex = findMemoryType(chosenGPU, reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    vkAllocateMemory(device, &alloc, NULL, &memAoS);
+
+    VkMemoryRequirements reqsV;
+    vkGetBufferMemoryRequirements(device, bufAoS, &reqsV);
+
+    VkMemoryAllocateInfo allocV = {0};
+    allocV.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocV.allocationSize = reqsV.size;
+    allocV.memoryTypeIndex = findMemoryType(chosenGPU, reqsV.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(device, &allocV, NULL, &memAoS);
     vkBindBufferMemory(device, bufAoS, memAoS, 0);
-    vkMapMemory(device, memAoS, 0, aosSize, 0, (void**)&g_mappedAoS);
-    // DELETED VkDescriptorSetLayout, VkDescriptorPool, VkDescriptorSet and vkUpdateDescriptorSets
+    vkMapMemory(device, memAoS, 0, aosSize, 0, (void**)&g_gpu_vertex_buffer);
+
+    // 2. Allocate Host-Visible Vulkan Index Buffer
+    VkDeviceSize indSize = maxIndices * sizeof(uint32_t);
+    VkBuffer bufIndexAoS;
+    VkDeviceMemory memIndexAoS;
+
+    VkBufferCreateInfo iboInfo = {0};
+    iboInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    iboInfo.size = indSize;
+    iboInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    vkCreateBuffer(device, &iboInfo, NULL, &bufIndexAoS);
+
+    VkMemoryRequirements reqsI;
+    vkGetBufferMemoryRequirements(device, bufIndexAoS, &reqsI);
+
+    VkMemoryAllocateInfo allocI = {0};
+    allocI.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocI.allocationSize = reqsI.size;
+    allocI.memoryTypeIndex = findMemoryType(chosenGPU, reqsI.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(device, &allocI, NULL, &memIndexAoS);
+    vkBindBufferMemory(device, bufIndexAoS, memIndexAoS, 0);
+    vkMapMemory(device, memIndexAoS, 0, indSize, 0, (void**)&g_gpu_index_buffer);
+
     VkSurfaceKHR surface; glfwCreateWindowSurface(instance, g_window, NULL, &surface);
     VkSurfaceCapabilitiesKHR surfaceCaps; vkGetPhysicalDeviceSurfaceCapabilitiesKHR(chosenGPU, surface, &surfaceCaps);
     VkExtent2D swapchainExtent = surfaceCaps.currentExtent;
@@ -292,14 +294,14 @@ uint32_t maxVerts = 4000000;
     // 1. SHADER STAGES
     // ========================================================
     VkPipelineShaderStageCreateInfo shaderStages[2] = {{0}};
-    shaderStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; 
-    shaderStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT; 
-    shaderStages[0].module = vertModule; 
+    shaderStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    shaderStages[0].module = vertModule;
     shaderStages[0].pName  = "main";
 
-    shaderStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; 
-    shaderStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT; 
-    shaderStages[1].module = fragModule; 
+    shaderStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    shaderStages[1].module = fragModule;
     shaderStages[1].pName  = "main";
 
     VkVertexInputBindingDescription bindingDesc = {0};
@@ -313,31 +315,31 @@ uint32_t maxVerts = 4000000;
     attrDesc.format = VK_FORMAT_R32G32B32_SFLOAT;
     attrDesc.offset = 0; // Starts at the beginning of the struct
 
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo = {0}; 
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo = {0};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInputInfo.vertexBindingDescriptionCount = 1;
     vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
     vertexInputInfo.vertexAttributeDescriptionCount = 1;
     vertexInputInfo.pVertexAttributeDescriptions = &attrDesc;
-    
+
     // Topology: Now set to Triangles!
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly = {0}; 
-    inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO; 
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly = {0};
+    inputAssembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    VkPipelineViewportStateCreateInfo viewportState = {0}; 
-    viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO; 
-    viewportState.viewportCount = 1; 
+    VkPipelineViewportStateCreateInfo viewportState = {0};
+    viewportState.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
     viewportState.scissorCount  = 1;
 
-    VkPipelineRasterizationStateCreateInfo rasterizer = {0}; 
-    rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO; 
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL; 
-    rasterizer.lineWidth   = 1.0f; 
+    VkPipelineRasterizationStateCreateInfo rasterizer = {0};
+    rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth   = 1.0f;
     rasterizer.cullMode    = VK_CULL_MODE_NONE; // Culling happens automatically if we want, but let's keep it off while debugging 3D
 
-    VkPipelineMultisampleStateCreateInfo multisampling = {0}; 
-    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO; 
+    VkPipelineMultisampleStateCreateInfo multisampling = {0};
+    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
     // --- NEW: DEPTH STENCIL STATE ---
@@ -353,43 +355,43 @@ uint32_t maxVerts = 4000000;
     // ========================================================
     // 3. COLOR BLENDING
     // ========================================================
-    VkPipelineColorBlendAttachmentState colorBlendAttachment = {0}; 
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT; 
-    colorBlendAttachment.blendEnable         = VK_TRUE; 
-    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA; 
-    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; 
-    colorBlendAttachment.colorBlendOp        = VK_BLEND_OP_ADD; 
-    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE; 
-    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO; 
+    VkPipelineColorBlendAttachmentState colorBlendAttachment = {0};
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable         = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.colorBlendOp        = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     colorBlendAttachment.alphaBlendOp        = VK_BLEND_OP_ADD;
 
-    VkPipelineColorBlendStateCreateInfo colorBlending = {0}; 
-    colorBlending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO; 
-    colorBlending.attachmentCount = 1; 
+    VkPipelineColorBlendStateCreateInfo colorBlending = {0};
+    colorBlending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
     colorBlending.pAttachments    = &colorBlendAttachment;
 
-    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR }; 
-    VkPipelineDynamicStateCreateInfo dynamicStateInfo = {0}; 
-    dynamicStateInfo.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO; 
-    dynamicStateInfo.dynamicStateCount = 2; 
+    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicStateInfo = {0};
+    dynamicStateInfo.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicStateInfo.dynamicStateCount = 2;
     dynamicStateInfo.pDynamicStates    = dynamicStates;
 
     // ========================================================
     // 4. PIPELINE LAYOUT & PUSH CONSTANTS (The Bridge)
     // ========================================================
     // UPDATED: Now sized for our 64-byte Camera Matrix instead of just screen resolution
-    VkPushConstantRange gfxPushRange = {0}; 
-    gfxPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; 
-    gfxPushRange.offset     = 0; 
+    VkPushConstantRange gfxPushRange = {0};
+    gfxPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    gfxPushRange.offset     = 0;
     gfxPushRange.size       = sizeof(CameraPushConstants); // <--- CHANGED!
 
-    VkPipelineLayoutCreateInfo gfxLayoutInfo = {0}; 
-    gfxLayoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO; 
+    VkPipelineLayoutCreateInfo gfxLayoutInfo = {0};
+    gfxLayoutInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     gfxLayoutInfo.setLayoutCount         = 0;     // <--- CHANGE FROM 1
     gfxLayoutInfo.pSetLayouts            = NULL;  // <--- CHANGE FROM &descriptorSetLayout
-    gfxLayoutInfo.pushConstantRangeCount = 1; 
+    gfxLayoutInfo.pushConstantRangeCount = 1;
     gfxLayoutInfo.pPushConstantRanges    = &gfxPushRange;
-    
+
     // ========================================================
     // 5. PIPELINE LAYOUT (Finalizing the bridge)
     // ========================================================
@@ -399,68 +401,68 @@ uint32_t maxVerts = 4000000;
     // ========================================================
     // 6. PIPELINE RENDERING INFO (Dynamic Rendering Link)
     // ========================================================
-    VkPipelineRenderingCreateInfo renderingCreateInfo = {0}; 
-    renderingCreateInfo.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO; 
-    renderingCreateInfo.colorAttachmentCount    = 1; 
+    VkPipelineRenderingCreateInfo renderingCreateInfo = {0};
+    renderingCreateInfo.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderingCreateInfo.colorAttachmentCount    = 1;
     renderingCreateInfo.pColorAttachmentFormats = &swapchainInfo.imageFormat;
-    
+
     // --- FIX #1: The Missing Depth Format ---
     // This tells Dynamic Rendering: "Hey, expect a 32-bit float depth buffer here!"
-    renderingCreateInfo.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT; 
+    renderingCreateInfo.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
 
     // ========================================================
     // 7. GRAPHICS PIPELINE CREATION (The Master State Object)
     // ========================================================
-    VkGraphicsPipelineCreateInfo gfxPipelineInfo = {0}; 
-    gfxPipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO; 
+    VkGraphicsPipelineCreateInfo gfxPipelineInfo = {0};
+    gfxPipelineInfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     gfxPipelineInfo.pNext               = &renderingCreateInfo; // <--- Connects Dynamic Rendering formats
-    gfxPipelineInfo.stageCount          = 2; 
-    gfxPipelineInfo.pStages             = shaderStages; 
-    gfxPipelineInfo.pVertexInputState   = &vertexInputInfo; 
-    gfxPipelineInfo.pInputAssemblyState = &inputAssembly; 
-    gfxPipelineInfo.pViewportState      = &viewportState; 
-    gfxPipelineInfo.pRasterizationState = &rasterizer; 
-    gfxPipelineInfo.pMultisampleState   = &multisampling; 
-    
+    gfxPipelineInfo.stageCount          = 2;
+    gfxPipelineInfo.pStages             = shaderStages;
+    gfxPipelineInfo.pVertexInputState   = &vertexInputInfo;
+    gfxPipelineInfo.pInputAssemblyState = &inputAssembly;
+    gfxPipelineInfo.pViewportState      = &viewportState;
+    gfxPipelineInfo.pRasterizationState = &rasterizer;
+    gfxPipelineInfo.pMultisampleState   = &multisampling;
+
     // --- FIX #2: The Missing Depth Silicon State ---
     // This connects the VkPipelineDepthStencilStateCreateInfo we made earlier!
-    gfxPipelineInfo.pDepthStencilState  = &depthStencil;        
-    
-    gfxPipelineInfo.pColorBlendState    = &colorBlending; 
-    gfxPipelineInfo.pDynamicState       = &dynamicStateInfo; 
+    gfxPipelineInfo.pDepthStencilState  = &depthStencil;
+
+    gfxPipelineInfo.pColorBlendState    = &colorBlending;
+    gfxPipelineInfo.pDynamicState       = &dynamicStateInfo;
     gfxPipelineInfo.layout              = graphicsPipelineLayout;
-    
-    VkPipeline graphicsPipeline; 
+
+    VkPipeline graphicsPipeline;
     vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gfxPipelineInfo, NULL, &graphicsPipeline);
 
     // ========================================================
     // 8. COMMAND POOL & BUFFERS (The instruction allocators)
     // ========================================================
-    VkCommandPoolCreateInfo cmdPoolInfo = {0}; 
-    cmdPoolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; 
-    cmdPoolInfo.queueFamilyIndex = qIndex; 
+    VkCommandPoolCreateInfo cmdPoolInfo = {0};
+    cmdPoolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cmdPoolInfo.queueFamilyIndex = qIndex;
     // This flag is crucial: It allows us to vkResetCommandBuffer every frame in the loop!
     cmdPoolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    
-    VkCommandPool commandPool; 
+
+    VkCommandPool commandPool;
     vkCreateCommandPool(device, &cmdPoolInfo, NULL, &commandPool);
-    
-    VkCommandBufferAllocateInfo cmdAllocInfo = {0}; 
-    cmdAllocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO; 
-    cmdAllocInfo.commandPool        = commandPool; 
-    cmdAllocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY; 
+
+    VkCommandBufferAllocateInfo cmdAllocInfo = {0};
+    cmdAllocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cmdAllocInfo.commandPool        = commandPool;
+    cmdAllocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAllocInfo.commandBufferCount = 1;
-    
-    VkCommandBuffer commandBuffer; 
+
+    VkCommandBuffer commandBuffer;
     vkAllocateCommandBuffers(device, &cmdAllocInfo, &commandBuffer);
 
     // ========================================================
     // 9. SYNCHRONIZATION (Semaphores)
     // ========================================================
-    VkSemaphoreCreateInfo semaInfo = {0}; 
-    semaInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO; 
-    
-    VkSemaphore imageAvailableSemaphore; 
+    VkSemaphoreCreateInfo semaInfo = {0};
+    semaInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    VkSemaphore imageAvailableSemaphore;
     vkCreateSemaphore(device, &semaInfo, NULL, &imageAvailableSemaphore);
 
     // ========================================================
@@ -479,20 +481,20 @@ uint32_t maxVerts = 4000000;
     depthBarrier.newLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    depthBarrier.image               = depthImage; 
-    
+    depthBarrier.image               = depthImage;
+
     depthBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     depthBarrier.subresourceRange.levelCount = 1;
     depthBarrier.subresourceRange.layerCount = 1;
-    
+
     depthBarrier.srcAccessMask = 0;
     depthBarrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
 
     // Inject the barrier into the command buffer
     vkCmdPipelineBarrier(
-        commandBuffer, 
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 
+        commandBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         0, 0, NULL, 0, NULL, 1, &depthBarrier
     );
 
@@ -505,7 +507,7 @@ uint32_t maxVerts = 4000000;
     setupSubmitInfo.commandBufferCount = 1;
     setupSubmitInfo.pCommandBuffers    = &commandBuffer;
     vkQueueSubmit(graphicsQueue, 1, &setupSubmitInfo, VK_NULL_HANDLE);
-    
+
     // Force the CPU to wait here for a millisecond until the GPU confirms the memory is formatted
     vkQueueWaitIdle(graphicsQueue);
 
@@ -528,15 +530,6 @@ uint32_t maxVerts = 4000000;
         if (lua_isnumber(L, -1)) { draw_count = lua_tointeger(L, -1); }
         lua_pop(L, 1);
 
-        // --- THE "ZIP" TRANSLATION ---
-        // If draw_count is particles, and each has 12 vertices (4 triangles)
-        int total_vertices = draw_count * 12; 
-        
-        for(int i = 0; i < total_vertices; i++) {
-            g_mappedAoS[i].x = g_ptrX[i];
-            g_mappedAoS[i].y = g_ptrY[i];
-            g_mappedAoS[i].z = g_ptrZ[i];
-        }
         // ========================================================
         // 1. FRAME ACQUISITION & COMMAND BUFFER SETUP
         // ========================================================
@@ -640,12 +633,20 @@ uint32_t maxVerts = 4000000;
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &bufAoS, offsets);
 
+        // Bind Index Buffer
+        vkCmdBindIndexBuffer(commandBuffer, bufIndexAoS, 0, VK_INDEX_TYPE_UINT32);
+
         // Push Camera Matrix
         vkCmdPushConstants(commandBuffer, graphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(CameraPushConstants), &g_cam_pc);
 
-        if (total_vertices > 0) {
-            // Standard non-instanced draw: (commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance)
-            vkCmdDraw(commandBuffer, total_vertices, 1, 0, 0);
+        if (draw_count > 0) {
+            // draw_count in Lua is total vertices (e.g. 400,000 for 100k particles)
+            // 4 vertices = 1 particle = 12 indices. 
+            // So total indices = (draw_count / 4) * 12 = draw_count * 3
+            int total_indices = draw_count * 3;
+            
+            // Indexed draw: (commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance)
+            vkCmdDrawIndexed(commandBuffer, total_indices, 1, 0, 0, 0);
         }
 
         vkCmdEndRendering(commandBuffer);
@@ -694,13 +695,14 @@ uint32_t maxVerts = 4000000;
     vkDestroySwapchainKHR(device, swapchain, NULL);
 
     // 8. FREE VRAM BUFFERS AND MALLOC
-    vkUnmapMemory(device, memAoS); 
-    vkDestroyBuffer(device, bufAoS, NULL); 
+    vkUnmapMemory(device, memAoS);
+    vkDestroyBuffer(device, bufAoS, NULL);
     vkFreeMemory(device, memAoS, NULL);
-    // LUA IS ALREADY DOING THIS FOR US
-    // free(g_ptrX);
-    // free(g_ptrY);
-    // free(g_ptrZ);
+
+    vkUnmapMemory(device, memIndexAoS); 
+    vkDestroyBuffer(device, bufIndexAoS, NULL); 
+    vkFreeMemory(device, memIndexAoS, NULL);
+    // Lua is also freeing memory
 
     // 9. Core Vulkan Context
     vkDestroyDevice(device, NULL);

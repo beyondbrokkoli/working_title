@@ -697,10 +697,10 @@ uint32_t maxVerts = 4000000;
     vkUnmapMemory(device, memAoS); 
     vkDestroyBuffer(device, bufAoS, NULL); 
     vkFreeMemory(device, memAoS, NULL);
-    
-    free(g_ptrX);
-    free(g_ptrY);
-    free(g_ptrZ);
+    // LUA IS ALREADY DOING THIS FOR US
+    // free(g_ptrX);
+    // free(g_ptrY);
+    // free(g_ptrZ);
 
     // 9. Core Vulkan Context
     vkDestroyDevice(device, NULL);

@@ -1,4 +1,3 @@
--- modules/camera.lua
 local ffi = require("ffi")
 local max, min, cos, sin, tan = math.max, math.min, math.cos, math.sin, math.tan
 
@@ -8,11 +7,15 @@ return function(MainCamera)
     local function UpdateBasis()
         local cy, sy = cos(MainCamera.yaw), sin(MainCamera.yaw)
         local cp, sp = cos(MainCamera.pitch), sin(MainCamera.pitch)
+        
+        -- Forward and Right stay exactly the same
         MainCamera.fwx, MainCamera.fwy, MainCamera.fwz = sy * cp, sp, cy * cp
         MainCamera.rtx, MainCamera.rty, MainCamera.rtz = cy, 0, -sy
-        MainCamera.upx = MainCamera.fwy * MainCamera.rtz
-        MainCamera.upy = MainCamera.fwz * MainCamera.rtx - MainCamera.fwx * MainCamera.rtz
-        MainCamera.upz = -MainCamera.fwy * MainCamera.rtx
+        
+        -- [FIXED] Negate the Up vector so it points to the sky (-Y) instead of the floor (+Y)
+        MainCamera.upx = -(MainCamera.fwy * MainCamera.rtz)
+        MainCamera.upy = -(MainCamera.fwz * MainCamera.rtx - MainCamera.fwx * MainCamera.rtz)
+        MainCamera.upz = MainCamera.fwy * MainCamera.rtx -- (Double negative becomes positive here)
     end
 
     function CameraModule.Init()
@@ -34,13 +37,16 @@ return function(MainCamera)
 
     function CameraModule.Tick(dt)
         local s = 200.0 * dt -- Slowed down slightly for donut viewing!
+        
         if love.keyboard.isDown("w") then MainCamera.x, MainCamera.y, MainCamera.z = MainCamera.x + MainCamera.fwx * s, MainCamera.y + MainCamera.fwy * s, MainCamera.z + MainCamera.fwz * s end
         if love.keyboard.isDown("s") then MainCamera.x, MainCamera.y, MainCamera.z = MainCamera.x - MainCamera.fwx * s, MainCamera.y - MainCamera.fwy * s, MainCamera.z - MainCamera.fwz * s end
         if love.keyboard.isDown("a") then MainCamera.x, MainCamera.z = MainCamera.x - MainCamera.rtx * s, MainCamera.z - MainCamera.rtz * s end
         if love.keyboard.isDown("d") then MainCamera.x, MainCamera.z = MainCamera.x + MainCamera.rtx * s, MainCamera.z + MainCamera.rtz * s end
+        
+        -- E subtracts Y (Moves UP towards the sky). Q adds Y (Moves DOWN towards the floor).
         if love.keyboard.isDown("e") then MainCamera.y = MainCamera.y - s end
         if love.keyboard.isDown("q") then MainCamera.y = MainCamera.y + s end
-        
+
         local rotSpeed = 2.5 * dt
         if love.keyboard.isDown("left") then MainCamera.yaw = MainCamera.yaw - rotSpeed end
         if love.keyboard.isDown("right") then MainCamera.yaw = MainCamera.yaw + rotSpeed end
@@ -54,7 +60,10 @@ return function(MainCamera)
     function CameraModule.MouseMoved(x, y, dx, dy)
         if love.mouse.getRelativeMode() then
             MainCamera.yaw = MainCamera.yaw + (dx * 0.002)
-            MainCamera.pitch = MainCamera.pitch - (dy * 0.002) -- Flipped for standard mouselook
+            
+            -- [FIXED] Changed - to + for standard non-inverted mouselook
+            MainCamera.pitch = MainCamera.pitch + (dy * 0.002) 
+            
             MainCamera.pitch = max(-1.56, min(1.56, MainCamera.pitch))
             UpdateBasis()
         end
@@ -91,7 +100,7 @@ return function(MainCamera)
 
         local proj = {
             f / aspect, 0,  0, 0,
-            0, f, 0, 0, -- NOT FLIPPING
+            0, -f, 0, 0, -- NOT FLIPPING
             0,  0, zFar / (zNear - zFar), -1,
             0,  0, -(zFar * zNear) / (zFar - zNear), 0
         }

@@ -1,25 +1,25 @@
 -- ========================================================================
 -- memory.lua
--- Pure SoA Motherboard. Dynamic Metaprogramming Allocator.
+-- Pure SoA Motherboard. Debloated for Vulkan/DX12 GPU Pipeline.
 -- ========================================================================
 local ffi = require("ffi")
 local Memory = {
-    Arrays = {}, -- <--- The new safe haven!
+    Arrays = {}, 
     Anchors = {} -- THE LIFESAVER: Prevents Lua GC from deleting our memory!
 }
+
 -- ==========================================
 -- [1] THE UNIVERSE BOUNDARIES (Static Limits)
 -- ==========================================
 MAX_OBJS = 1000000
-MAX_VERTS = 9600000
-MAX_TRIS = 4000000
+MAX_VERTS = 9600000  -- 1M Tetrahedrons = 4M Verts. 9.6M gives massive headroom.
+MAX_TRIS = 4800000   -- 1M Tetrahedrons = 4M Tris. 4.8M gives headroom.
 
 MAX_BOUND_SPHERES = 512
 MAX_BOUND_BOXES = 512
 
 BOUND_CONTAIN = 1; BOUND_REPEL = 2; BOUND_SOLID = 3;
 
--- Global Counters (Used by Allocator below)
 local next_obj_id = 0
 local next_vert_id = 0
 local next_tri_id = 0
@@ -30,38 +30,28 @@ local next_box_id = 0
 -- PRO-LEVEL CACHE-ALIGNED MEMORY ALLOCATOR (64-Byte Boundaries)
 -- ========================================================================
 local function AllocateSoA(type_str, count, names)
-    -- 1. Extract the base C type (e.g., "float[?]" or "double[1]" -> "float" / "double")
-    -- The pattern "%[.-%]" safely strips brackets and anything inside them!
     local base_type = string.gsub(type_str, "%[.-%]", "")
     local bytes_needed = ffi.sizeof(base_type) * count
-
-    -- 2. Over-allocate by 64 bytes to guarantee room for shifting
     local alloc_size = bytes_needed + 64
 
     for i = 1, #names do
         local name = names[i]
-
-        -- 3. Allocate raw bytes
         local raw_bytes = ffi.new("uint8_t[?]", alloc_size)
-
-        -- 4. ANCHOR IT! Prevents the Garbage Collector from vaporizing our memory
         Memory.Anchors[name] = raw_bytes
 
-        -- 5. Calculate the exact offset needed to hit a 64-byte boundary
         local ptr_num = tonumber(ffi.cast("uintptr_t", raw_bytes))
         local offset = (64 - (ptr_num % 64)) % 64
 
-        -- 6. Shift the pointer and cast it to the actual type (e.g., float*)
         local aligned_ptr = ffi.cast(base_type .. "*", raw_bytes + offset)
-
         Memory.Arrays[name] = aligned_ptr
     end
 end
+
 -- ========================================================================
 -- [3] THE SCHEMA (The Pure Data Arrays)
 -- ========================================================================
 
--- 1. Object Spatial Data (Transforms, Velocities, and Basis Matrices)
+-- 1. Object Spatial Data
 AllocateSoA("float[?]", MAX_OBJS, {
     "Obj_Radius", "Obj_X", "Obj_Y", "Obj_Z",
     "Obj_VelX", "Obj_VelY", "Obj_VelZ",
@@ -76,30 +66,21 @@ AllocateSoA("int[?]", MAX_OBJS, {
     "Obj_VertStart", "Obj_VertCount", "Obj_TriStart", "Obj_TriCount"
 })
 
--- 3. The Visibility Buffer (Used by the Camera Cull phase to pass to Raster)
--- Note: Modules will clear and populate this buffer every frame.
+-- 3. The Visibility Buffer (Broadphase Culling Target)
 AllocateSoA("double[?]", 1, {"Count_Visible"})
 AllocateSoA("int[?]", MAX_OBJS, {"Visible_IDs"})
 
--- 4. Vertex Data (Local, Camera, and Projected Points)
+-- 4. Vertex Data (Local base coords ONLY - GPU handles world/projection)
 AllocateSoA("float[?]", MAX_VERTS, {
-    "Vert_LX", "Vert_LY", "Vert_LZ",
-    "Vert_WX", "Vert_WY", "Vert_WZ", -- <<< ADD THESE THREE
-    "Vert_CX", "Vert_CY", "Vert_CZ",
-    "Vert_PX", "Vert_PY", "Vert_PZ"
+    "Vert_LX", "Vert_LY", "Vert_LZ"
 })
-AllocateSoA("bool[?]", MAX_VERTS, {"Vert_Valid"})
+-- (DELETED: WX, WY, WZ, CX, CY, CZ, PX, PY, PZ, Valid)
 
--- 5 Triangle Data (Faces, Colors, and Shading Channels)
+-- 5. Triangle Data (Topology ONLY - GPU handles lighting and shading)
 AllocateSoA("int[?]", MAX_TRIS, {"Tri_V1", "Tri_V2", "Tri_V3"})
-AllocateSoA("float[?]", MAX_TRIS, {"Tri_A", "Tri_R", "Tri_G", "Tri_B", "Tri_MinY", "Tri_MaxY"}) -- <--- ADDED HERE
-AllocateSoA("uint32_t[?]", MAX_TRIS, {"Tri_Color", "Tri_BakedColor"})
-AllocateSoA("float[?]", MAX_TRIS, {"Tri_LNX", "Tri_LNY", "Tri_LNZ"})
--- Output from C Assembly
-AllocateSoA("bool[?]", MAX_TRIS, { "Tri_Valid" })
-AllocateSoA("uint32_t[?]", MAX_TRIS, { "Tri_ShadedColor" })
+-- (DELETED: Colors, Normals, MinY/MaxY, Valid flags)
 
--- 6. Physics Collision (Bounding Volumes)
+-- 6. Physics Collision (Bounding Volumes for Broadphase)
 AllocateSoA("float[?]", MAX_BOUND_SPHERES, {"BoundSphere_X", "BoundSphere_Y", "BoundSphere_Z", "BoundSphere_RSq"})
 AllocateSoA("uint8_t[?]", MAX_BOUND_SPHERES, {"BoundSphere_Mode"})
 
@@ -112,10 +93,10 @@ AllocateSoA("float[?]", MAX_BOUND_BOXES, {
 })
 AllocateSoA("uint8_t[?]", MAX_BOUND_BOXES, {"BoundBox_Mode"})
 
--- 7. The Command Queue (For C-Backend Dispatch)
+-- 7. The Command Queue
 AllocateSoA("int[?]", 64, {"CommandQueue"})
 
--- 8. The Dual-Core Swarm Arrays (Safely anchored in Memory.Arrays!)
+-- 8. The Dual-Core Swarm Arrays (Physics/Render Double Buffer)
 AllocateSoA("float[?]", MAX_OBJS, {
     "Swarm_PX_0", "Swarm_PX_1", "Swarm_PY_0", "Swarm_PY_1", "Swarm_PZ_0", "Swarm_PZ_1",
     "Swarm_VX_0", "Swarm_VX_1", "Swarm_VY_0", "Swarm_VY_1", "Swarm_VZ_0", "Swarm_VZ_1",
@@ -124,7 +105,6 @@ AllocateSoA("float[?]", MAX_OBJS, {
 AllocateSoA("int[?]", MAX_OBJS, {
     "Swarm_Indices_0", "Swarm_Indices_1", "Swarm_TempIndices"
 })
-
 
 -- ==========================================
 -- [4] GLOBAL SINGLETONS & STRUCTS
@@ -154,15 +134,11 @@ ffi.cdef[[
         int *Obj_VertStart, *Obj_VertCount;
         int *Obj_TriStart, *Obj_TriCount;
 
+        // Debloated Geometry Pointers
         float *Vert_LX, *Vert_LY, *Vert_LZ;
-        float *Vert_PX, *Vert_PY, *Vert_PZ; bool *Vert_Valid;
-
         int *Tri_V1, *Tri_V2, *Tri_V3;
-        uint32_t *Tri_BakedColor, *Tri_ShadedColor; bool *Tri_Valid;
-        float *Tri_MinY, *Tri_MaxY;
 
-        float *Tri_LNX, *Tri_LNY, *Tri_LNZ;
-
+        // Swarm Double Buffers
         float *Swarm_PX[2]; float *Swarm_PY[2]; float *Swarm_PZ[2];
         float *Swarm_VX[2]; float *Swarm_VY[2]; float *Swarm_VZ[2];
         int *Swarm_Indices[2];
@@ -178,35 +154,21 @@ ffi.cdef[[
         float *Swarm_TempDistances;
     } RenderMemory;
 
-    // ENGINE BINDING (Call Once on Startup)
     void vmath_bind_engine(RenderMemory* mem, CameraState* cam, int* queue);
-
-    // INVERSION OF CONTROL
     void vmath_bind_vulkan_buffers(void* v_buf, void* i_buf);
-
-    // RESOLUTION BINDING (Call on Startup & Resize)
-    void vmath_set_resolution(int w, int h, uint32_t* screen_ptr, float* z_buffer);
-
-    // THE LEAN COMMAND QUEUE (Call Every Frame)
-    void vmath_execute_queue(
-        int command_count,
-        float time, float dt,
-        int read_idx, int write_idx
-    );
-    void vmath_generate_torus(
-        int count,
-        float* lx, float* ly, float* lz,
-        float time, float major_R, float minor_r
-    );
+    
+    // Command Queue Execution
+    void vmath_execute_queue(int command_count, float time, float dt, int read_idx, int write_idx);
+    
     void vmath_init_thread_pool();
     void vmath_shutdown_thread_pool();
 ]]
 
 UniverseCage = ffi.new("GlobalCage", {-15000, -4000, -15000, 15000, 15000, 15000, true})
-MainCamera = ffi.new("CameraState") -- Officially part of the Motherboard now!
+MainCamera = ffi.new("CameraState")
 
 -- ========================================================================
--- [5] THE SLICE CHECKOUT SYSTEM (The Engine's Core Protection)
+-- [5] THE SLICE CHECKOUT SYSTEM
 -- ========================================================================
 
 function Memory.ClaimObjects(count)
@@ -220,7 +182,9 @@ function Memory.ClaimGeometry(v_count, t_count)
     local v_start, t_start = next_vert_id, next_tri_id
     next_vert_id = next_vert_id + v_count
     next_tri_id = next_tri_id + t_count
-    if next_vert_id > MAX_VERTS or next_tri_id > MAX_TRIS then error("FATAL: Out of Geometry Memory!") end
+    if next_vert_id > MAX_VERTS or next_tri_id > MAX_TRIS then 
+        error("FATAL: Out of Geometry Memory! V:" .. next_vert_id .. "/" .. MAX_VERTS .. " T:" .. next_tri_id .. "/" .. MAX_TRIS) 
+    end
     return v_start, t_start
 end
 
@@ -237,6 +201,7 @@ function Memory.ClaimBoundBoxes(count)
     if next_box_id > MAX_BOUND_BOXES then error("FATAL: Out of Bounding Box Memory!") end
     return start_id, next_box_id - 1
 end
+
 function Memory.Reset()
     next_obj_id = 0
     next_vert_id = 0
@@ -249,9 +214,8 @@ end
 Memory.RenderStruct = ffi.new("RenderMemory")
 
 -- ========================================================================
--- [5] THE DUAL-CORE STRUCT BINDING
+-- [6] THE DUAL-CORE STRUCT BINDING
 -- ========================================================================
--- First, manually bind the Ping-Pong arrays into the C-Struct arrays
 Memory.RenderStruct.Swarm_PX[0] = Memory.Arrays.Swarm_PX_0
 Memory.RenderStruct.Swarm_PX[1] = Memory.Arrays.Swarm_PX_1
 Memory.RenderStruct.Swarm_PY[0] = Memory.Arrays.Swarm_PY_0
@@ -270,9 +234,8 @@ Memory.RenderStruct.Swarm_Indices[0] = Memory.Arrays.Swarm_Indices_0
 Memory.RenderStruct.Swarm_Indices[1] = Memory.Arrays.Swarm_Indices_1
 
 -- ========================================================================
--- [6] THE AUTOMATIC STRUCT BINDING
+-- [7] THE AUTOMATIC STRUCT BINDING
 -- ========================================================================
--- Now let your pcall loop safely bind all the remaining single-arrays!
 for array_name, array_ptr in pairs(Memory.Arrays) do
     pcall(function() Memory.RenderStruct[array_name] = array_ptr end)
 end

@@ -64,26 +64,26 @@ return function()
             
             -- FACE 1: Front
             A.Tri_V1[tIdx] = base+0; A.Tri_V2[tIdx] = base+1; A.Tri_V3[tIdx] = base+2; 
-            A.Tri_LNX[tIdx] = 0.0; A.Tri_LNY[tIdx] = 0.44721; A.Tri_LNZ[tIdx] = 0.89442;
-            A.Tri_BakedColor[tIdx] = col1; 
+--            A.Tri_LNX[tIdx] = 0.0; A.Tri_LNY[tIdx] = 0.44721; A.Tri_LNZ[tIdx] = 0.89442;
+--            A.Tri_BakedColor[tIdx] = col1; 
             tIdx = tIdx + 1
             
             -- FACE 2: Right
             A.Tri_V1[tIdx] = base+0; A.Tri_V2[tIdx] = base+2; A.Tri_V3[tIdx] = base+3; 
-            A.Tri_LNX[tIdx] = 0.87287; A.Tri_LNY[tIdx] = 0.21821; A.Tri_LNZ[tIdx] = -0.43643;
-            A.Tri_BakedColor[tIdx] = col2; 
+--            A.Tri_LNX[tIdx] = 0.87287; A.Tri_LNY[tIdx] = 0.21821; A.Tri_LNZ[tIdx] = -0.43643;
+--            A.Tri_BakedColor[tIdx] = col2; 
             tIdx = tIdx + 1
             
             -- FACE 3: Left
             A.Tri_V1[tIdx] = base+0; A.Tri_V2[tIdx] = base+3; A.Tri_V3[tIdx] = base+1; 
-            A.Tri_LNX[tIdx] = -0.87287; A.Tri_LNY[tIdx] = 0.21821; A.Tri_LNZ[tIdx] = -0.43643;
-            A.Tri_BakedColor[tIdx] = col3; 
+--            A.Tri_LNX[tIdx] = -0.87287; A.Tri_LNY[tIdx] = 0.21821; A.Tri_LNZ[tIdx] = -0.43643;
+--            A.Tri_BakedColor[tIdx] = col3; 
             tIdx = tIdx + 1
             
             -- FACE 4: Bottom
             A.Tri_V1[tIdx] = base+1; A.Tri_V2[tIdx] = base+3; A.Tri_V3[tIdx] = base+2; 
-            A.Tri_LNX[tIdx] = 0.0; A.Tri_LNY[tIdx] = -1.0; A.Tri_LNZ[tIdx] = 0.0;
-            A.Tri_BakedColor[tIdx] = col4; 
+--            A.Tri_LNX[tIdx] = 0.0; A.Tri_LNY[tIdx] = -1.0; A.Tri_LNZ[tIdx] = 0.0;
+--            A.Tri_BakedColor[tIdx] = col4; 
             tIdx = tIdx + 1
         end
     end

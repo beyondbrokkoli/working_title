@@ -109,23 +109,20 @@ typedef struct {
     float rtx, rty, rtz;
     float upx, upy, upz;
 } CameraState;
-
 typedef struct {
     float *Obj_X, *Obj_Y, *Obj_Z, *Obj_Radius;
     float *Obj_FWX, *Obj_FWY, *Obj_FWZ;
     float *Obj_RTX, *Obj_RTY, *Obj_RTZ;
     float *Obj_UPX, *Obj_UPY, *Obj_UPZ;
+    
     int *Obj_VertStart, *Obj_VertCount;
     int *Obj_TriStart, *Obj_TriCount;
 
+    // Debloated Geometry Pointers
     float *Vert_LX, *Vert_LY, *Vert_LZ;
-    float *Vert_PX, *Vert_PY, *Vert_PZ; bool *Vert_Valid;
-
     int *Tri_V1, *Tri_V2, *Tri_V3;
-    uint32_t *Tri_BakedColor, *Tri_ShadedColor; bool *Tri_Valid;
-    float *Tri_MinY, *Tri_MaxY;
-    float *Tri_LNX, *Tri_LNY, *Tri_LNZ;
 
+    // Swarm Double Buffers
     float *Swarm_PX[2]; float *Swarm_PY[2]; float *Swarm_PZ[2];
     float *Swarm_VX[2]; float *Swarm_VY[2]; float *Swarm_VZ[2];
     int *Swarm_Indices[2];
